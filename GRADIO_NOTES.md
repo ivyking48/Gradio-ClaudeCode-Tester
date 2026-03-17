@@ -133,6 +133,17 @@ with gr.Row():
 - Using `max-height` on the video without `min-height: 0` on the flex container — the video won't shrink below its intrinsic size
 - Relying on Gradio's `Markdown` component to not overflow — it adds its own scroll containers; hide them with `* { scrollbar-width: none }`
 
+## Browser Caching
+
+Gradio aggressively caches served files (videos, images, etc.) via `/gradio_api/file=` URLs. When you replace a file on disk (e.g., regenerate `test_assets/rgb_test.mp4`), the browser will keep showing the old version even after restarting the app.
+
+**Fix**: Hard refresh with **Cmd+Shift+R** (Mac) or **Ctrl+Shift+R** (Windows/Linux). A normal refresh or closing/reopening the tab is not enough.
+
+You can also clear Gradio's temp file cache:
+```bash
+rm -rf /private/var/folders/*/T/gradio/   # macOS
+```
+
 ## Component Behavior Notes
 
 **`gr.Number` defaults**:
