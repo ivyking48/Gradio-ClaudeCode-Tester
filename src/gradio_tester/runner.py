@@ -15,6 +15,7 @@ def run_all_checks(
     endpoint_inputs: dict[str, list[Any]] | None = None,
     expected_components: dict[str, str] | None = None,
     variance_checks: dict[str, list[list[Any]]] | None = None,
+    interact_actions: list[dict[str, Any]] | None = None,
     screenshot_path: str = "screenshot.png",
     timeout: float = 30.0,
 ) -> AppReport:
@@ -96,6 +97,14 @@ def run_all_checks(
 
         report.results.extend(
             run_screenshot_checks(url, output_path=screenshot_path, timeout_ms=int(timeout * 1000))
+        )
+
+    # UI interaction
+    if interact_actions:
+        from gradio_tester.interact import run_interaction_checks
+
+        report.results.extend(
+            run_interaction_checks(url, actions=interact_actions, timeout_ms=int(timeout * 1000))
         )
 
     return report

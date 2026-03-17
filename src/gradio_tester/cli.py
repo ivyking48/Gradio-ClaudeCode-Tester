@@ -35,6 +35,12 @@ def main(argv: list[str] | None = None) -> None:
         help='Check output varies across inputs: --check-variance /predict \'[[0], [5], [9]]\'',
     )
     parser.add_argument(
+        "--interact",
+        type=str,
+        default=None,
+        help='JSON list of UI actions: \'[{"action":"fill","label":"Name","value":"5"},{"action":"click","label":"Submit"},{"action":"verify","label":"Output","expected":"result"}]\'',
+    )
+    parser.add_argument(
         "--expect-components",
         type=str,
         default=None,
@@ -66,6 +72,11 @@ def main(argv: list[str] | None = None) -> None:
         for ep_name, samples_json in args.check_variance:
             variance_checks[ep_name] = json.loads(samples_json)
 
+    # Parse interaction actions
+    interact_actions = None
+    if args.interact:
+        interact_actions = json.loads(args.interact)
+
     # Parse expected components
     expected_components = None
     if args.expect_components:
@@ -82,6 +93,7 @@ def main(argv: list[str] | None = None) -> None:
         endpoint_inputs=endpoint_inputs,
         expected_components=expected_components,
         variance_checks=variance_checks,
+        interact_actions=interact_actions,
         screenshot_path=args.screenshot,
         timeout=args.timeout,
     )
