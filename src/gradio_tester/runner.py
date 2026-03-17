@@ -14,6 +14,7 @@ def run_all_checks(
     checks: list[str] | None = None,
     endpoint_inputs: dict[str, list[Any]] | None = None,
     expected_components: dict[str, str] | None = None,
+    variance_checks: dict[str, list[list[Any]]] | None = None,
     screenshot_path: str = "screenshot.png",
     timeout: float = 30.0,
 ) -> AppReport:
@@ -24,6 +25,8 @@ def run_all_checks(
         checks: List of check names to run. Defaults to all.
         endpoint_inputs: Dict of {api_name: [inputs]} for client checks.
         expected_components: Dict of {label: component_type} for validation.
+        variance_checks: Dict of {api_name: [[inputs1], [inputs2], ...]} to
+            verify that an endpoint produces different outputs for different inputs.
         screenshot_path: Where to save screenshots.
         timeout: Per-check timeout in seconds.
 
@@ -77,6 +80,15 @@ def run_all_checks(
         report.results.extend(
             call_all_endpoints(url, endpoint_inputs=endpoint_inputs, timeout=timeout)
         )
+
+    # Output variance checks
+    if variance_checks:
+        from gradio_tester.client import check_output_variance
+
+        for api_name, input_samples in variance_checks.items():
+            report.results.append(
+                check_output_variance(url, api_name=api_name, input_samples=input_samples, timeout=timeout)
+            )
 
     # Screenshots
     if "screenshot" in checks:

@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
-from gradio_tester.client import call_endpoint, call_all_endpoints, list_endpoints, _is_serializable
+from gradio_tester.client import call_endpoint, call_all_endpoints, check_output_variance, list_endpoints, _is_serializable
 
 
 @patch("gradio_client.Client")
@@ -118,3 +118,52 @@ def test_is_serializable():
     assert _is_serializable(42) is True
     assert _is_serializable({"key": "value"}) is True
     assert _is_serializable([1, "two", None]) is True
+
+
+# --- Output variance tests ---
+
+
+@patch("gradio_client.Client")
+def test_check_output_variance_passes_when_outputs_vary(MockClient):
+    mock_client = MagicMock()
+    MockClient.return_value = mock_client
+    mock_client.predict.side_effect = ["red", "blue", "green"]
+
+    result = check_output_variance(
+        "https://test.gradio.live",
+        api_name="/get_color",
+        input_samples=[[0], [5], [9]],
+    )
+    assert result.passed is True
+    assert result.details["unique_outputs"] == 3
+    assert result.details["total_calls"] == 3
+    assert result.error is None
+
+
+@patch("gradio_client.Client")
+def test_check_output_variance_fails_when_all_same(MockClient):
+    mock_client = MagicMock()
+    MockClient.return_value = mock_client
+    mock_client.predict.return_value = "red"  # Always returns "red"
+
+    result = check_output_variance(
+        "https://test.gradio.live",
+        api_name="/get_color",
+        input_samples=[[0], [5], [9]],
+    )
+    assert result.passed is False
+    assert result.details["unique_outputs"] == 1
+    assert "always returns" in result.error
+    assert "ignoring input" in result.error
+
+
+@patch("gradio_client.Client")
+def test_check_output_variance_connection_error(MockClient):
+    MockClient.side_effect = ConnectionError("Refused")
+    result = check_output_variance(
+        "https://bad.gradio.live",
+        api_name="/predict",
+        input_samples=[[0], [1]],
+    )
+    assert result.passed is False
+    assert "Refused" in result.error

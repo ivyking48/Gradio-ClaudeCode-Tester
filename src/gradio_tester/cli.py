@@ -28,6 +28,13 @@ def main(argv: list[str] | None = None) -> None:
         help='Call an endpoint: --call /predict \'["arg1", "arg2"]\'',
     )
     parser.add_argument(
+        "--check-variance",
+        nargs=2,
+        action="append",
+        metavar=("ENDPOINT", "SAMPLES_JSON"),
+        help='Check output varies across inputs: --check-variance /predict \'[[0], [5], [9]]\'',
+    )
+    parser.add_argument(
         "--expect-components",
         type=str,
         default=None,
@@ -52,6 +59,13 @@ def main(argv: list[str] | None = None) -> None:
         for ep_name, args_json in args.call:
             endpoint_inputs[ep_name] = json.loads(args_json)
 
+    # Parse variance checks
+    variance_checks = None
+    if args.check_variance:
+        variance_checks = {}
+        for ep_name, samples_json in args.check_variance:
+            variance_checks[ep_name] = json.loads(samples_json)
+
     # Parse expected components
     expected_components = None
     if args.expect_components:
@@ -67,6 +81,7 @@ def main(argv: list[str] | None = None) -> None:
         checks=checks,
         endpoint_inputs=endpoint_inputs,
         expected_components=expected_components,
+        variance_checks=variance_checks,
         screenshot_path=args.screenshot,
         timeout=args.timeout,
     )

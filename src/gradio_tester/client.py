@@ -122,6 +122,68 @@ def call_all_endpoints(
     return results
 
 
+def check_output_variance(
+    url: str,
+    api_name: str,
+    input_samples: list[list[Any]],
+    timeout: float = 60.0,
+) -> TestResult:
+    """Call an endpoint with multiple inputs and check that outputs vary.
+
+    Catches bugs where an endpoint ignores its input and always returns
+    the same value (e.g., a UI default is always sent instead of user input).
+
+    Args:
+        url: Gradio app URL.
+        api_name: Endpoint name (e.g., "/get_color_at_timestamp").
+        input_samples: List of input arg lists to try, e.g. [[0], [5], [9]].
+        timeout: Per-call timeout in seconds.
+    """
+    start = time.monotonic()
+    try:
+        from gradio_client import Client
+
+        client = Client(url)
+        calls = []
+        outputs = set()
+
+        for inputs in input_samples:
+            result = client.predict(*inputs, api_name=api_name)
+            output_str = str(result)
+            outputs.add(output_str)
+            calls.append({"inputs": inputs, "output": result if _is_serializable(result) else output_str})
+
+        elapsed = (time.monotonic() - start) * 1000
+        all_same = len(outputs) == 1
+        passed = not all_same
+
+        return TestResult(
+            name="client_output_variance",
+            passed=passed,
+            duration_ms=elapsed,
+            details={
+                "api_name": api_name,
+                "calls": calls,
+                "unique_outputs": len(outputs),
+                "total_calls": len(input_samples),
+            },
+            error=(
+                f"Endpoint always returns {next(iter(outputs))!r} for {len(input_samples)} "
+                f"different inputs — output may be ignoring input"
+                if all_same else None
+            ),
+        )
+    except Exception as e:
+        elapsed = (time.monotonic() - start) * 1000
+        return TestResult(
+            name="client_output_variance",
+            passed=False,
+            duration_ms=elapsed,
+            details={"api_name": api_name},
+            error=str(e),
+        )
+
+
 def _is_serializable(obj: Any) -> bool:
     """Check if an object is JSON-serializable."""
     import json
