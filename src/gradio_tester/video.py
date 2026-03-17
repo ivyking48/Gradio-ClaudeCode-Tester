@@ -6,14 +6,12 @@ dominant colors, and verifies against expected color sequences.
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
 import tempfile
 import time
 import urllib.request
-from typing import Any
 
 from gradio_tester.models import TestResult
 

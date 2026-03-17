@@ -5,7 +5,6 @@ from __future__ import annotations
 import time
 import urllib.error
 import urllib.request
-from typing import Any
 
 from gradio_tester.models import TestResult
 
