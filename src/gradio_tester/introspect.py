@@ -64,13 +64,34 @@ def get_config(url: str, timeout: float = 10.0) -> TestResult:
 
 
 def get_api_info(url: str, timeout: float = 10.0) -> TestResult:
-    """Fetch and parse the /info endpoint.
+    """Fetch and parse the API info endpoint.
 
-    Returns API schema: endpoints with their parameters and return types.
+    Tries /gradio_api/info first (Gradio ≥6.x), then falls back
+    to /info (Gradio 4.x/5.x).
     """
-    endpoint = url.rstrip("/") + "/info"
+    base = url.rstrip("/")
+    candidates = [
+        base + "/gradio_api/info",
+        base + "/info",
+    ]
     try:
-        data, elapsed = _fetch_json(endpoint, timeout=timeout)
+        last_error = None
+        for endpoint in candidates:
+            try:
+                data, elapsed = _fetch_json(endpoint, timeout=timeout)
+                break
+            except urllib.error.HTTPError as e:
+                last_error = e
+                if e.code != 404:
+                    raise
+                continue
+        else:
+            return TestResult(
+                name="introspect_api_info",
+                passed=False,
+                duration_ms=0,
+                error=str(last_error),
+            )
 
         # Parse named endpoints
         endpoints = {}

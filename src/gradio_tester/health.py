@@ -79,23 +79,48 @@ def check_reachable(url: str, timeout: float = 15.0) -> TestResult:
 
 
 def check_queue_status(url: str, timeout: float = 10.0) -> TestResult:
-    """Check the Gradio queue/status endpoint for app health."""
-    endpoint = url.rstrip("/") + "/queue/status"
+    """Check the Gradio queue/status endpoint for app health.
+
+    Tries /gradio_api/queue/status first (Gradio ≥6.x), then falls back
+    to /queue/status (Gradio 4.x/5.x).
+    """
+    base = url.rstrip("/")
+    candidates = [
+        base + "/gradio_api/queue/status",
+        base + "/queue/status",
+    ]
     start = time.monotonic()
     try:
         import json
 
-        req = urllib.request.Request(endpoint, method="GET")
-        req.add_header("User-Agent", "gradio-tester/0.1.0")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            elapsed = (time.monotonic() - start) * 1000
-            data = json.loads(resp.read().decode("utf-8"))
-            return TestResult(
-                name="health_queue_status",
-                passed=True,
-                duration_ms=elapsed,
-                details={"queue_status": data},
-            )
+        last_error = None
+        for endpoint in candidates:
+            try:
+                req = urllib.request.Request(endpoint, method="GET")
+                req.add_header("User-Agent", "gradio-tester/0.1.0")
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    elapsed = (time.monotonic() - start) * 1000
+                    data = json.loads(resp.read().decode("utf-8"))
+                    return TestResult(
+                        name="health_queue_status",
+                        passed=True,
+                        duration_ms=elapsed,
+                        details={"queue_status": data, "endpoint": endpoint},
+                    )
+            except urllib.error.HTTPError as e:
+                last_error = e
+                if e.code != 404:
+                    raise
+                continue
+
+        # All candidates returned 404
+        elapsed = (time.monotonic() - start) * 1000
+        return TestResult(
+            name="health_queue_status",
+            passed=False,
+            duration_ms=elapsed,
+            error=str(last_error),
+        )
     except Exception as e:
         elapsed = (time.monotonic() - start) * 1000
         return TestResult(
