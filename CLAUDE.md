@@ -2,9 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## What This Project Does
+## Project Goals
 
-A Python framework for Claude Code to autonomously test and verify Gradio web applications — primarily those hosted on Google Colab via `*.gradio.live` share URLs. Provides health checks, API introspection, endpoint invocation, Playwright UI interaction, screenshots, video color verification, and output variance detection.
+This project has two objectives:
+
+1. **Autonomous agent testing** — A Python framework that gives AI agents (Claude Code, etc.) the tools to independently QA-test Gradio web applications. Agents should be able to discover bugs without being told what to look for, using health checks, API calls, Playwright UI interaction, video analysis, and cross-validation.
+
+2. **Gradio know-how encyclopedia** — A living reference (`GRADIO_NOTES.md`) of patterns, workarounds, and lessons learned from building and testing Gradio apps. What works, what doesn't, and why. Every bug we fix and every workaround we discover gets documented here so future agents and developers don't repeat the same mistakes.
+
+The framework primarily targets Gradio apps hosted on Google Colab via `*.gradio.live` share URLs, but works with any Gradio app.
 
 ## Build & Run Commands
 
@@ -95,4 +101,5 @@ gradio-tester <url> --interact '[
 - Health and introspect try `/gradio_api/` prefixed paths first (Gradio ≥6.x), falling back to legacy paths
 - Use `conda activate gradio-tester` for this project's environment
 - Python ≥ 3.10 required
-- See `GRADIO_NOTES.md` for Gradio-specific patterns, workarounds, and lessons learned
+- When you discover a Gradio pattern, workaround, or gotcha, **add it to `GRADIO_NOTES.md`** — this is the project's knowledge base and should grow over time
+- See `GRADIO_NOTES.md` for existing Gradio-specific patterns, workarounds, and lessons learned
