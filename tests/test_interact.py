@@ -334,3 +334,110 @@ def test_screenshot_action(mock_async_pw):
     assert len(results) == 1
     assert results[0].passed is True
     page.screenshot.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Seek video action
+# ---------------------------------------------------------------------------
+
+@patch("gradio_tester.interact._PLAYWRIGHT_AVAILABLE", True)
+@patch("gradio_tester.interact.async_playwright", create=True)
+def test_seek_video_action(mock_async_pw):
+    page, _ = _make_mock_page()
+
+    # Mock a video locator
+    video_loc = AsyncMock()
+    video_loc.wait_for = AsyncMock()
+    video_loc.evaluate = AsyncMock(return_value=5.0)
+
+    # page.locator("video").first returns video_loc
+    video_chain = MagicMock()
+    video_chain.first = video_loc
+    page.locator = MagicMock(return_value=video_chain)
+
+    browser = _make_mock_browser(page)
+    mock_async_pw.return_value = _make_mock_playwright(browser)
+
+    from gradio_tester.interact import execute_actions
+
+    results = execute_actions("https://test.gradio.live", [
+        {"action": "seek_video", "timestamp": 5.0},
+    ])
+
+    assert len(results) == 1
+    assert results[0].passed is True
+    assert results[0].name == "interact_step_0_seek_video"
+    assert results[0].details["requested_timestamp"] == 5.0
+    # evaluate called twice: once to seek, once to read back
+    assert video_loc.evaluate.await_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Read input action
+# ---------------------------------------------------------------------------
+
+@patch("gradio_tester.interact._PLAYWRIGHT_AVAILABLE", True)
+@patch("gradio_tester.interact.async_playwright", create=True)
+def test_read_input_action(mock_async_pw):
+    loc = _make_mock_locator(input_value="5.0")
+    page, _ = _make_mock_page(loc)
+    browser = _make_mock_browser(page)
+    mock_async_pw.return_value = _make_mock_playwright(browser)
+
+    from gradio_tester.interact import execute_actions
+
+    results = execute_actions("https://test.gradio.live", [
+        {"action": "read_input", "label": "Timestamp (seconds)"},
+    ])
+
+    assert len(results) == 1
+    assert results[0].passed is True
+    assert results[0].details["value"] == "5.0"
+
+
+# ---------------------------------------------------------------------------
+# Seek + click + verify sequence (simulates the video-timestamp bug)
+# ---------------------------------------------------------------------------
+
+@patch("gradio_tester.interact._PLAYWRIGHT_AVAILABLE", True)
+@patch("gradio_tester.interact.async_playwright", create=True)
+def test_seek_then_verify_detects_stale_input(mock_async_pw):
+    """After seeking video, if the input still has '0', verify catches the bug."""
+    # The verify action reads input_value which returns "red" (the buggy output)
+    loc = _make_mock_locator(input_value="red")
+    page, _ = _make_mock_page(loc)
+
+    video_loc = AsyncMock()
+    video_loc.wait_for = AsyncMock()
+    video_loc.evaluate = AsyncMock(return_value=5.0)
+    video_chain = MagicMock()
+    video_chain.first = video_loc
+
+    # Loading indicator locator (returns count=0 = not busy)
+    loading_loc = AsyncMock()
+    loading_loc.count = AsyncMock(return_value=0)
+
+    def smart_locator(selector):
+        if selector == "video":
+            return video_chain
+        return loading_loc
+
+    page.locator = MagicMock(side_effect=smart_locator)
+
+    browser = _make_mock_browser(page)
+    mock_async_pw.return_value = _make_mock_playwright(browser)
+
+    from gradio_tester.interact import execute_actions
+
+    results = execute_actions("https://test.gradio.live", [
+        {"action": "seek_video", "timestamp": 5.0},
+        {"action": "click", "label": "Check Color at Timestamp"},
+        {"action": "verify", "label": "Dominant Color", "expected": "blue"},
+    ])
+
+    assert len(results) == 3
+    assert results[0].passed is True   # seek succeeded
+    assert results[1].passed is True   # click succeeded
+    assert results[2].passed is False  # verify caught the bug
+    assert '"blue"' in results[2].error
+    assert '"red"' in results[2].error

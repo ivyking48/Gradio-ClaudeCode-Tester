@@ -13,7 +13,10 @@ with gr.Blocks(title="RGB Color Test Video") as demo:
     video = gr.Video(value=VIDEO_PATH, label="Test Video")
 
     with gr.Row():
-        timestamp_input = gr.Number(label="Timestamp (seconds)", value=0, minimum=0, maximum=10)
+        timestamp_input = gr.Number(
+            label="Timestamp (seconds)", value=0, minimum=0, maximum=10,
+            info="Updates automatically when you pause the video",
+        )
         check_btn = gr.Button("Check Color at Timestamp")
 
     color_output = gr.Textbox(label="Dominant Color", interactive=False)
@@ -26,6 +29,10 @@ with gr.Blocks(title="RGB Color Test Video") as demo:
             return "blue"
         else:
             return "green"
+
+    # Sync video playback position to the timestamp input when paused
+    video.pause(fn=lambda v: v["playback_position"], inputs=video, outputs=timestamp_input)
+    video.stop(fn=lambda v: v["playback_position"], inputs=video, outputs=timestamp_input)
 
     check_btn.click(fn=get_color_at_timestamp, inputs=timestamp_input, outputs=color_output)
 

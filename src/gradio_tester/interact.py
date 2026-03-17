@@ -144,6 +144,113 @@ async def _do_verify(page: Any, action: dict, timeout_ms: int) -> TestResult:
         )
 
 
+async def _do_seek_video(page: Any, action: dict, timeout_ms: int) -> TestResult:
+    """Seek a <video> element to a specific timestamp and pause it.
+
+    Simulates what a user does when they scrub through a video and stop
+    at a particular point. Uses JavaScript to set video.currentTime and
+    dispatch pause/seeked events.
+    """
+    start = time.monotonic()
+    timestamp = float(action["timestamp"])
+    label = action.get("label")  # Optional: find video by Gradio label
+    try:
+        # Find the video element
+        if label:
+            # Look for video inside a labeled Gradio component
+            selector = f'label:has-text("{label}")'
+            container = page.locator(selector).locator("..").locator("..")
+            video_el = container.locator("video").first
+        else:
+            video_el = page.locator("video").first
+
+        await video_el.wait_for(state="attached", timeout=timeout_ms)
+
+        # Seek and pause via JavaScript
+        await video_el.evaluate(
+            """(el, ts) => {
+                el.currentTime = ts;
+                el.pause();
+                el.dispatchEvent(new Event('seeked'));
+                el.dispatchEvent(new Event('pause'));
+            }""",
+            timestamp,
+        )
+
+        # Also update any Number input linked to timestamp via Gradio's
+        # internal event system. Find inputs with labels containing
+        # "timestamp" and set their value + trigger input/change events
+        # so Gradio picks up the change.
+        if action.get("sync_input"):
+            sync_label = action["sync_input"]
+            input_locator = page.get_by_label(sync_label)
+            await input_locator.clear(timeout=timeout_ms)
+            await input_locator.fill(str(timestamp), timeout=timeout_ms)
+            await input_locator.dispatch_event("input")
+            await input_locator.dispatch_event("change")
+
+        # Small wait for Gradio to react to events
+        await asyncio.sleep(0.5)
+
+        # Read back the actual currentTime
+        actual_time = await video_el.evaluate("el => el.currentTime")
+        elapsed = (time.monotonic() - start) * 1000
+
+        return TestResult(
+            name="interact_seek_video",
+            passed=True,
+            duration_ms=elapsed,
+            details={
+                "requested_timestamp": timestamp,
+                "actual_timestamp": round(actual_time, 2),
+                "label": label,
+            },
+        )
+    except Exception as e:
+        elapsed = (time.monotonic() - start) * 1000
+        return TestResult(
+            name="interact_seek_video",
+            passed=False,
+            duration_ms=elapsed,
+            details={"timestamp": timestamp, "label": label},
+            error=str(e),
+        )
+
+
+async def _do_read_input(page: Any, action: dict, timeout_ms: int) -> TestResult:
+    """Read the current value of an input component and report it.
+
+    Useful for debugging: check what value a Number/Textbox has before
+    clicking a button, to see if video seek updated it or not.
+    """
+    start = time.monotonic()
+    label = action["label"]
+    try:
+        locator = page.get_by_label(label)
+        try:
+            value = await locator.input_value(timeout=timeout_ms)
+        except Exception:
+            value = await locator.text_content(timeout=timeout_ms) or ""
+        value = value.strip()
+        elapsed = (time.monotonic() - start) * 1000
+
+        return TestResult(
+            name="interact_read_input",
+            passed=True,
+            duration_ms=elapsed,
+            details={"label": label, "value": value},
+        )
+    except Exception as e:
+        elapsed = (time.monotonic() - start) * 1000
+        return TestResult(
+            name="interact_read_input",
+            passed=False,
+            duration_ms=elapsed,
+            details={"label": label},
+            error=str(e),
+        )
+
+
 async def _do_wait(page: Any, action: dict, timeout_ms: int) -> TestResult:
     ms = action.get("ms", 1000)
     await asyncio.sleep(ms / 1000)
@@ -182,6 +289,8 @@ _ACTION_HANDLERS = {
     "fill": _do_fill,
     "click": _do_click,
     "verify": _do_verify,
+    "seek_video": _do_seek_video,
+    "read_input": _do_read_input,
     "wait": _do_wait,
     "screenshot": _do_screenshot,
 }
