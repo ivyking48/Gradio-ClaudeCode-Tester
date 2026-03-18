@@ -251,6 +251,68 @@ async def _do_read_input(page: Any, action: dict, timeout_ms: int) -> TestResult
         )
 
 
+async def _do_read_slider(page: Any, action: dict, timeout_ms: int) -> TestResult:
+    """Read the current value of a slider by its label."""
+    start = time.monotonic()
+    label = action["label"]
+    try:
+        locator = page.get_by_label(label)
+        # Sliders use aria-valuenow or an input[type=range]
+        value = await locator.get_attribute("aria-valuenow", timeout=timeout_ms)
+        if value is None:
+            # Try reading as input value
+            value = await locator.input_value(timeout=timeout_ms)
+        elapsed = (time.monotonic() - start) * 1000
+        return TestResult(
+            name="interact_read_slider",
+            passed=True,
+            duration_ms=elapsed,
+            details={"label": label, "value": value},
+        )
+    except Exception as e:
+        elapsed = (time.monotonic() - start) * 1000
+        return TestResult(
+            name="interact_read_slider",
+            passed=False,
+            duration_ms=elapsed,
+            details={"label": label},
+            error=str(e),
+        )
+
+
+async def _do_download_file(page: Any, action: dict, timeout_ms: int) -> TestResult:
+    """Find a download link in a gr.File component and return its URL."""
+    start = time.monotonic()
+    label = action.get("label", "")
+    try:
+        # Look for download link near the label
+        if label:
+            container = page.get_by_label(label).locator("..").locator("..")
+            link = container.locator("a[download], a[href*='/file=']").first
+        else:
+            link = page.locator("a[download], a[href*='/file=']").first
+
+        href = await link.get_attribute("href", timeout=timeout_ms)
+        elapsed = (time.monotonic() - start) * 1000
+
+        return TestResult(
+            name="interact_download_file",
+            passed=href is not None and len(href) > 0,
+            duration_ms=elapsed,
+            details={"label": label, "url": href},
+            error=None if href else "No download link found",
+        )
+    except Exception as e:
+        elapsed = (time.monotonic() - start) * 1000
+        return TestResult(
+            name="interact_download_file",
+            passed=False,
+            duration_ms=elapsed,
+            details={"label": label},
+            error=str(e),
+        )
+
+
 async def _do_wait(page: Any, action: dict, timeout_ms: int) -> TestResult:
     ms = action.get("ms", 1000)
     await asyncio.sleep(ms / 1000)
@@ -291,6 +353,8 @@ _ACTION_HANDLERS = {
     "verify": _do_verify,
     "seek_video": _do_seek_video,
     "read_input": _do_read_input,
+    "read_slider": _do_read_slider,
+    "download_file": _do_download_file,
     "wait": _do_wait,
     "screenshot": _do_screenshot,
 }

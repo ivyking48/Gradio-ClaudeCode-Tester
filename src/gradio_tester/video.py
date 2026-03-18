@@ -185,3 +185,93 @@ def verify_color_sequence(
     finally:
         if tmp_dir:
             shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def verify_video_duration(
+    video_path: str,
+    expected_duration: float,
+    tolerance: float = 0.5,
+) -> TestResult:
+    """Verify that a video's duration matches expected, within tolerance."""
+    start = time.monotonic()
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "csv=p=0", video_path],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            raise RuntimeError(f"ffprobe failed: {result.stderr[:200]}")
+
+        actual = float(result.stdout.strip())
+        elapsed = (time.monotonic() - start) * 1000
+        passed = abs(actual - expected_duration) <= tolerance
+
+        return TestResult(
+            name="video_duration",
+            passed=passed,
+            duration_ms=elapsed,
+            details={
+                "expected_duration": expected_duration,
+                "actual_duration": round(actual, 2),
+                "tolerance": tolerance,
+            },
+            error=(
+                f"Duration {actual:.2f}s, expected {expected_duration:.2f}s (±{tolerance}s)"
+                if not passed else None
+            ),
+        )
+    except Exception as e:
+        elapsed = (time.monotonic() - start) * 1000
+        return TestResult(
+            name="video_duration",
+            passed=False,
+            duration_ms=elapsed,
+            error=str(e),
+        )
+
+
+def verify_video_dimensions(
+    video_path: str,
+    expected_width: int,
+    expected_height: int,
+) -> TestResult:
+    """Verify video dimensions match expected width x height."""
+    start = time.monotonic()
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries", "stream=width,height",
+             "-select_streams", "v:0", "-of", "csv=p=0", video_path],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            raise RuntimeError(f"ffprobe failed: {result.stderr[:200]}")
+
+        parts = result.stdout.strip().split(",")
+        actual_w, actual_h = int(parts[0]), int(parts[1])
+        elapsed = (time.monotonic() - start) * 1000
+        passed = actual_w == expected_width and actual_h == expected_height
+
+        return TestResult(
+            name="video_dimensions",
+            passed=passed,
+            duration_ms=elapsed,
+            details={
+                "expected_width": expected_width,
+                "expected_height": expected_height,
+                "actual_width": actual_w,
+                "actual_height": actual_h,
+            },
+            error=(
+                f"Dimensions {actual_w}x{actual_h}, expected {expected_width}x{expected_height}"
+                if not passed else None
+            ),
+        )
+    except Exception as e:
+        elapsed = (time.monotonic() - start) * 1000
+        return TestResult(
+            name="video_dimensions",
+            passed=False,
+            duration_ms=elapsed,
+            error=str(e),
+        )

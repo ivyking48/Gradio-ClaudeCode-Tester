@@ -4,9 +4,12 @@ import os
 
 import pytest
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
-from gradio_tester.video import extract_frame_color, verify_color_sequence, _identify_color
+from gradio_tester.video import (
+    extract_frame_color, verify_color_sequence, verify_video_duration,
+    verify_video_dimensions, _identify_color,
+)
 
 VIDEO_PATH = os.path.join(os.path.dirname(__file__), "..", "test_assets", "quadrant_test.mp4")
 pytestmark = pytest.mark.skipif(
@@ -85,3 +88,37 @@ class TestEdgeCasesNoVideo:
         assert result.passed is True
         assert result.details["total_count"] == 0
         mock_ffmpeg.assert_not_called()
+
+    @patch("gradio_tester.video.subprocess.run")
+    def test_verify_video_duration_pass(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="10.5\n", stderr="")
+        result = verify_video_duration("/fake/video.mp4", 10.5)
+        assert result.passed is True
+        assert result.details["actual_duration"] == 10.5
+
+    @patch("gradio_tester.video.subprocess.run")
+    def test_verify_video_duration_fail(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="10.5\n", stderr="")
+        result = verify_video_duration("/fake/video.mp4", 5.0)
+        assert result.passed is False
+        assert "10.50s" in result.error
+
+    @patch("gradio_tester.video.subprocess.run")
+    def test_verify_video_duration_ffprobe_missing(self, mock_run):
+        mock_run.side_effect = FileNotFoundError("ffprobe not found")
+        result = verify_video_duration("/fake/video.mp4", 10.0)
+        assert result.passed is False
+
+    @patch("gradio_tester.video.subprocess.run")
+    def test_verify_video_dimensions_pass(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="640,360\n", stderr="")
+        result = verify_video_dimensions("/fake/video.mp4", 640, 360)
+        assert result.passed is True
+        assert result.details["actual_width"] == 640
+
+    @patch("gradio_tester.video.subprocess.run")
+    def test_verify_video_dimensions_fail(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="640,360\n", stderr="")
+        result = verify_video_dimensions("/fake/video.mp4", 1920, 1080)
+        assert result.passed is False
+        assert "640x360" in result.error

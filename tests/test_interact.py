@@ -441,3 +441,61 @@ def test_seek_then_verify_detects_stale_input(mock_async_pw):
     assert results[2].passed is False  # verify caught the bug
     assert '"blue"' in results[2].error
     assert '"red"' in results[2].error
+
+
+# ---------------------------------------------------------------------------
+# Read slider action
+# ---------------------------------------------------------------------------
+
+@patch("gradio_tester.interact._PLAYWRIGHT_AVAILABLE", True)
+@patch("gradio_tester.interact.async_playwright", create=True)
+def test_read_slider_action(mock_async_pw):
+    loc = _make_mock_locator()
+    loc.get_attribute = AsyncMock(return_value="2.5")
+    page, _ = _make_mock_page(loc)
+    browser = _make_mock_browser(page)
+    mock_async_pw.return_value = _make_mock_playwright(browser)
+
+    from gradio_tester.interact import execute_actions
+
+    results = execute_actions("https://test.gradio.live", [
+        {"action": "read_slider", "label": "Zoom"},
+    ])
+
+    assert len(results) == 1
+    assert results[0].passed is True
+    assert results[0].details["value"] == "2.5"
+
+
+# ---------------------------------------------------------------------------
+# Download file action
+# ---------------------------------------------------------------------------
+
+@patch("gradio_tester.interact._PLAYWRIGHT_AVAILABLE", True)
+@patch("gradio_tester.interact.async_playwright", create=True)
+def test_download_file_action(mock_async_pw):
+    # Mock a download link
+    link_loc = AsyncMock()
+    link_loc.get_attribute = AsyncMock(return_value="/gradio_api/file=/tmp/export.mp4")
+
+    loc = _make_mock_locator()
+    container = AsyncMock()
+    container.locator = MagicMock(return_value=AsyncMock(first=link_loc))
+    loc_parent = AsyncMock()
+    loc_parent.locator = MagicMock(return_value=container)
+    loc.locator = MagicMock(return_value=loc_parent)
+
+    page, _ = _make_mock_page(loc)
+    page.get_by_label = MagicMock(return_value=loc)
+    browser = _make_mock_browser(page)
+    mock_async_pw.return_value = _make_mock_playwright(browser)
+
+    from gradio_tester.interact import execute_actions
+
+    results = execute_actions("https://test.gradio.live", [
+        {"action": "download_file", "label": "Exported Video"},
+    ])
+
+    assert len(results) == 1
+    assert results[0].passed is True
+    assert "file" in results[0].details.get("url", "")
