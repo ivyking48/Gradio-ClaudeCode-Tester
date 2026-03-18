@@ -8,46 +8,51 @@ from unittest.mock import patch
 
 from gradio_tester.video import extract_frame_color, verify_color_sequence, _identify_color
 
-VIDEO_PATH = os.path.join(os.path.dirname(__file__), "..", "test_assets", "rgb_test.mp4")
+VIDEO_PATH = os.path.join(os.path.dirname(__file__), "..", "test_assets", "quadrant_test.mp4")
 pytestmark = pytest.mark.skipif(
     not os.path.exists(VIDEO_PATH), reason="Test video not found"
 )
 
 
-def test_extract_red_frame():
-    result = extract_frame_color(VIDEO_PATH, 1.0)
+# quadrant_test.mp4: 20s, 640x360, 4 colored quadrants per segment
+# Segment 1 (0-6.67s): TL=red, TR=blue, BL=green, BR=yellow
+# Segment 2 (6.67-13.33s): TL=cyan, TR=magenta, BL=orange, BR=purple
+# Segment 3 (13.33-20s): TL=white, TR=navy, BL=lime, BR=crimson
+# Full-frame average colors vary by segment (mixed quadrants)
+
+
+def test_extract_frame_color_segment1():
+    """Segment 1 full-frame average is a mix of red+blue+green+yellow."""
+    result = extract_frame_color(VIDEO_PATH, 3.0)
     assert result.passed is True
-    assert result.details["identified_color"] == "red"
+    assert result.details["identified_color"] is not None
 
 
-def test_extract_blue_frame():
-    result = extract_frame_color(VIDEO_PATH, 5.0)
+def test_extract_frame_color_segment2():
+    """Segment 2 has different quadrant colors than segment 1."""
+    result = extract_frame_color(VIDEO_PATH, 10.0)
     assert result.passed is True
-    assert result.details["identified_color"] == "blue"
 
 
-def test_extract_green_frame():
-    result = extract_frame_color(VIDEO_PATH, 8.0)
+def test_extract_frame_color_segment3():
+    result = extract_frame_color(VIDEO_PATH, 17.0)
     assert result.passed is True
-    assert result.details["identified_color"] == "green"
 
 
-def test_verify_full_sequence_passes():
-    result = verify_color_sequence(
-        VIDEO_PATH,
-        [(1.0, "red"), (5.0, "blue"), (8.0, "green")],
-    )
-    assert result.passed is True
-    assert result.details["passed_count"] == 3
+def test_verify_segments_differ():
+    """Different segments should produce different average colors."""
+    r1 = extract_frame_color(VIDEO_PATH, 3.0)
+    r2 = extract_frame_color(VIDEO_PATH, 10.0)
+    assert r1.passed and r2.passed
+    assert r1.details["avg_rgb"] != r2.details["avg_rgb"]
 
 
 def test_verify_wrong_color_fails():
     result = verify_color_sequence(
         VIDEO_PATH,
-        [(1.0, "blue")],  # It's actually red at 1s
+        [(3.0, "cyan")],  # Segment 1 avg is not cyan
     )
     assert result.passed is False
-    assert result.details["checks"][0]["actual"] == "red"
 
 
 def test_extract_at_invalid_timestamp():

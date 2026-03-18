@@ -1,10 +1,90 @@
-"""Gradio app that serves a zigzag square animation for verification testing."""
+"""Gradio app for trimming and zooming video with live CSS preview and ffmpeg export."""
+
+import os
+import subprocess
+import tempfile
+import time
 
 import gradio as gr
 
-VIDEO_PATH = "test_assets/rgb_test.mp4"
+VIDEO_PATH = "test_assets/quadrant_test.mp4"
 
-with gr.Blocks(title="Zigzag Square Tracker", css="""
+# Get video dimensions via ffprobe
+_probe = subprocess.run(
+    ["ffprobe", "-v", "quiet", "-show_entries", "stream=width,height",
+     "-of", "csv=p=0", VIDEO_PATH],
+    capture_output=True, text=True,
+)
+_w, _h = (int(x) for x in _probe.stdout.strip().split(","))
+VIDEO_W, VIDEO_H = _w, _h
+
+# Get duration
+_dur = subprocess.run(
+    ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+     "-of", "csv=p=0", VIDEO_PATH],
+    capture_output=True, text=True,
+)
+VIDEO_DURATION = float(_dur.stdout.strip())
+
+
+def export_video(trim_start, trim_end, zoom, pan_x, pan_y):
+    """Export a trimmed and zoomed video using ffmpeg."""
+    trim_start = max(0, float(trim_start))
+    trim_end = min(VIDEO_DURATION, float(trim_end))
+    zoom = max(1.0, min(4.0, float(zoom)))
+    pan_x = max(-1.0, min(1.0, float(pan_x)))
+    pan_y = max(-1.0, min(1.0, float(pan_y)))
+
+    if trim_end <= trim_start:
+        return None, "Error: trim end must be after trim start"
+
+    duration = trim_end - trim_start
+
+    # Compute crop from zoom and pan (same math as VideoCurtain)
+    crop_w = int(VIDEO_W / zoom)
+    crop_h = int(VIDEO_H / zoom)
+    # Pan maps [-1, 1] to the available offset range
+    max_offset_x = (VIDEO_W - crop_w) // 2
+    max_offset_y = (VIDEO_H - crop_h) // 2
+    crop_x = (VIDEO_W - crop_w) // 2 + int(pan_x * max_offset_x)
+    crop_y = (VIDEO_H - crop_h) // 2 + int(pan_y * max_offset_y)
+
+    # Clamp to valid range
+    crop_x = max(0, min(crop_x, VIDEO_W - crop_w))
+    crop_y = max(0, min(crop_y, VIDEO_H - crop_h))
+
+    # Build ffmpeg command
+    output_dir = tempfile.mkdtemp(prefix="gradio_export_")
+    output_path = os.path.join(output_dir, f"export_{int(time.time())}.mp4")
+
+    vf_parts = ["setpts=PTS-STARTPTS"]
+    if zoom > 1.0:
+        vf_parts.append(f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y}")
+        vf_parts.append(f"scale={VIDEO_W}:{VIDEO_H}:flags=lanczos")
+    vf = ",".join(vf_parts)
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-ss", str(trim_start), "-t", str(duration),
+        "-i", VIDEO_PATH,
+        "-vf", vf,
+        "-c:v", "libx264", "-crf", "18", "-preset", "medium",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        "-an",
+        output_path,
+    ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if result.returncode != 0:
+        return None, f"Export failed: {result.stderr[-300:]}"
+
+    return output_path, f"Exported {duration:.1f}s video ({crop_w}x{crop_h} crop at {zoom:.1f}x zoom)"
+
+
+# --- Gradio UI ---
+
+with gr.Blocks(title="Video Trim & Zoom", css="""
     html, body, .gradio-container, .main, .wrap, .contain {
         height: 100vh !important;
         max-height: 100vh !important;
@@ -27,30 +107,119 @@ with gr.Blocks(title="Zigzag Square Tracker", css="""
         min-height: 0 !important;
         overflow: hidden !important;
     }
-    #video-block > div { height: 100% !important; }
-    #video-block video {
-        max-height: 100% !important;
-        max-width: 100% !important;
-        display: block !important;
-        margin: 0 auto !important;
+    #video-block > div { height: 100% !important; display: flex !important; justify-content: center !important; }
+    #preview-container {
+        position: relative;
+        overflow: hidden;
+        max-height: 100%;
+        display: inline-block;
+    }
+    #test-video {
+        display: block;
+        max-height: 100%;
+        transform-origin: center center;
     }
     .gradio-container p, .gradio-container label, .gradio-container input,
     .gradio-container textarea, .gradio-container button, .gradio-container span,
-    .gradio-container .info { font-size: 1.3em !important; }
+    .gradio-container .info { font-size: 1.1em !important; }
     .gradio-container h1 { font-size: revert !important; }
 """) as demo:
-    gr.Markdown("# Zigzag Square Animation")
-    gr.Markdown(
-        "A cyan square moves right → down → left → down → right across "
-        "a 640×360 dark canvas over 20 seconds."
-    )
+    gr.Markdown("# Video Trim & Zoom")
 
     video_html = gr.HTML(
-        """<video id="test-video" controls>
-            <source src="/gradio_api/file=test_assets/rgb_test.mp4" type="video/mp4">
-        </video>""",
+        f"""<div id="preview-container">
+            <video id="test-video" controls>
+                <source src="/gradio_api/file={VIDEO_PATH}" type="video/mp4">
+            </video>
+        </div>""",
         elem_id="video-block",
     )
+
+    with gr.Row():
+        trim_start = gr.Number(label="Trim Start (s)", value=0, minimum=0,
+                               maximum=VIDEO_DURATION, step=0.1, elem_id="trim-start")
+        btn_set_start = gr.Button("Set Start ◀", size="sm")
+        trim_end = gr.Number(label="Trim End (s)", value=VIDEO_DURATION, minimum=0,
+                             maximum=VIDEO_DURATION, step=0.1, elem_id="trim-end")
+        btn_set_end = gr.Button("Set End ▶", size="sm")
+
+    with gr.Row():
+        zoom_slider = gr.Slider(label="Zoom", minimum=1.0, maximum=4.0,
+                                step=0.1, value=1.0, elem_id="zoom-slider")
+        pan_x_slider = gr.Slider(label="Pan X", minimum=-1.0, maximum=1.0,
+                                 step=0.05, value=0.0, elem_id="pan-x")
+        pan_y_slider = gr.Slider(label="Pan Y", minimum=-1.0, maximum=1.0,
+                                 step=0.05, value=0.0, elem_id="pan-y")
+
+    with gr.Row():
+        export_btn = gr.Button("Export", variant="primary")
+        status_box = gr.Textbox(label="Status", interactive=False)
+
+    output_file = gr.File(label="Exported Video", visible=True)
+
+    # --- Set Trim Start/End from video position (js= pattern) ---
+    btn_set_start.click(
+        fn=lambda ts: round(ts, 1),
+        inputs=trim_start,
+        outputs=trim_start,
+        js="""(ts) => {
+            const v = document.getElementById('test-video');
+            return (v && v.currentTime > 0) ? v.currentTime : ts;
+        }""",
+    )
+    btn_set_end.click(
+        fn=lambda ts: round(ts, 1),
+        inputs=trim_end,
+        outputs=trim_end,
+        js="""(ts) => {
+            const v = document.getElementById('test-video');
+            return (v && v.currentTime > 0) ? v.currentTime : ts;
+        }""",
+    )
+
+    # --- Live CSS preview for zoom/pan ---
+    _preview_js = """
+    (zoom, px, py) => {
+        const v = document.getElementById('test-video');
+        if (v) {
+            v.style.transform = `scale(${zoom}) translate(${-px * 30}%, ${-py * 30}%)`;
+        }
+        return [zoom, px, py];
+    }
+    """
+
+    for slider in [zoom_slider, pan_x_slider, pan_y_slider]:
+        slider.change(
+            fn=lambda z, px, py: (z, px, py),
+            inputs=[zoom_slider, pan_x_slider, pan_y_slider],
+            outputs=[zoom_slider, pan_x_slider, pan_y_slider],
+            js=_preview_js,
+        )
+
+    # --- Export ---
+    export_btn.click(
+        fn=export_video,
+        inputs=[trim_start, trim_end, zoom_slider, pan_x_slider, pan_y_slider],
+        outputs=[output_file, status_box],
+    )
+
+    # Apply initial preview transform on load
+    demo.load(js="""
+    () => {
+        // Enforce trim range on video playback
+        setInterval(() => {
+            const v = document.getElementById('test-video');
+            const startEl = document.querySelector('#trim-start input');
+            const endEl = document.querySelector('#trim-end input');
+            if (v && startEl && endEl && !v.paused) {
+                const start = parseFloat(startEl.value) || 0;
+                const end = parseFloat(endEl.value) || v.duration;
+                if (v.currentTime < start) v.currentTime = start;
+                if (v.currentTime > end) { v.pause(); v.currentTime = end; }
+            }
+        }, 200);
+    }
+    """)
 
 if __name__ == "__main__":
     demo.launch(allowed_paths=["test_assets"])
