@@ -26,6 +26,9 @@ _dur = subprocess.run(
 )
 VIDEO_DURATION = float(_dur.stdout.strip())
 
+# Single export directory — reused across exports, old files cleaned up
+_EXPORT_DIR = tempfile.mkdtemp(prefix="gradio_export_")
+
 
 def export_video(trim_start, trim_end, zoom, pan_x, pan_y):
     """Export a trimmed and zoomed video using ffmpeg."""
@@ -36,7 +39,7 @@ def export_video(trim_start, trim_end, zoom, pan_x, pan_y):
     pan_y = max(-1.0, min(1.0, float(pan_y)))
 
     if trim_end <= trim_start:
-        return None, "Error: trim end must be after trim start"
+        return gr.update(value=None, visible=False), "Error: trim end must be after trim start"
 
     duration = trim_end - trim_start
 
@@ -53,9 +56,10 @@ def export_video(trim_start, trim_end, zoom, pan_x, pan_y):
     crop_x = max(0, min(crop_x, VIDEO_W - crop_w))
     crop_y = max(0, min(crop_y, VIDEO_H - crop_h))
 
-    # Build ffmpeg command
-    output_dir = tempfile.mkdtemp(prefix="gradio_export_")
-    output_path = os.path.join(output_dir, f"export_{int(time.time())}.mp4")
+    # Clean old exports and write to the single export directory
+    for old in os.listdir(_EXPORT_DIR):
+        os.remove(os.path.join(_EXPORT_DIR, old))
+    output_path = os.path.join(_EXPORT_DIR, f"export_{int(time.time())}.mp4")
 
     vf_parts = ["setpts=PTS-STARTPTS"]
     if zoom > 1.0:
@@ -77,60 +81,33 @@ def export_video(trim_start, trim_end, zoom, pan_x, pan_y):
 
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     if result.returncode != 0:
-        return None, f"Export failed: {result.stderr[-300:]}"
+        return gr.update(value=None, visible=False), f"Export failed: {result.stderr[-300:]}"
 
-    return output_path, f"Exported {duration:.1f}s video ({crop_w}x{crop_h} crop at {zoom:.1f}x zoom)"
+    return gr.update(value=output_path, visible=True), f"Exported {duration:.1f}s video ({crop_w}x{crop_h} crop at {zoom:.1f}x zoom)"
 
 
 # --- Gradio UI ---
 
 with gr.Blocks(title="Video Trim & Zoom", css="""
-    html, body, .gradio-container, .main, .wrap, .contain {
-        height: 100vh !important;
-        max-height: 100vh !important;
-        overflow: hidden !important;
-        margin: 0 !important;
-    }
     * { scrollbar-width: none !important; }
     *::-webkit-scrollbar { display: none !important; }
-    .gradio-container > .main > .wrap > .contain {
-        display: flex !important;
-        flex-direction: column !important;
-        height: 100vh !important;
-        padding: 8px 16px !important;
-        box-sizing: border-box !important;
-        gap: 4px !important;
-    }
-    .gradio-container > .main > .wrap > .contain > * { flex-shrink: 0; }
-    #video-block {
-        flex: 1 1 auto !important;
-        min-height: 0 !important;
-        overflow: hidden !important;
-    }
-    #video-block > div { height: 100% !important; display: flex !important; justify-content: center !important; }
-    #preview-container {
-        position: relative;
-        overflow: hidden;
-        max-height: 100%;
-        display: inline-block;
-    }
-    #test-video {
-        display: block;
-        max-height: 100%;
-        transform-origin: center center;
-    }
     .gradio-container p, .gradio-container label, .gradio-container input,
     .gradio-container textarea, .gradio-container button, .gradio-container span,
     .gradio-container .info { font-size: 1.1em !important; }
     .gradio-container h1 { font-size: revert !important; }
+    #video-crop { overflow: hidden; }
+    #test-video { display: block; max-width: 100%; transform-origin: center center; }
 """) as demo:
     gr.Markdown("# Video Trim & Zoom")
 
     video_html = gr.HTML(
         f"""<div id="preview-container">
-            <video id="test-video" controls>
-                <source src="/gradio_api/file={VIDEO_PATH}" type="video/mp4">
-            </video>
+            <div id="video-crop" style="overflow:hidden; position:relative;">
+                <video id="test-video" controls
+                       style="transform-origin:center center; display:block; width:100%;">
+                    <source src="/gradio_api/file={VIDEO_PATH}" type="video/mp4">
+                </video>
+            </div>
         </div>""",
         elem_id="video-block",
     )
@@ -154,8 +131,7 @@ with gr.Blocks(title="Video Trim & Zoom", css="""
     with gr.Row():
         export_btn = gr.Button("Export", variant="primary")
         status_box = gr.Textbox(label="Status", interactive=False)
-
-    output_file = gr.File(label="Exported Video", visible=True)
+        output_file = gr.File(label="Exported Video", visible=False)
 
     # --- Set Trim Start/End from video position (js= pattern) ---
     btn_set_start.click(
@@ -164,7 +140,7 @@ with gr.Blocks(title="Video Trim & Zoom", css="""
         outputs=trim_start,
         js="""(ts) => {
             const v = document.getElementById('test-video');
-            return (v && v.currentTime > 0) ? v.currentTime : ts;
+            return (v && typeof v.currentTime === 'number') ? v.currentTime : ts;
         }""",
     )
     btn_set_end.click(
@@ -173,7 +149,7 @@ with gr.Blocks(title="Video Trim & Zoom", css="""
         outputs=trim_end,
         js="""(ts) => {
             const v = document.getElementById('test-video');
-            return (v && v.currentTime > 0) ? v.currentTime : ts;
+            return (v && typeof v.currentTime === 'number') ? v.currentTime : ts;
         }""",
     )
 
@@ -181,8 +157,15 @@ with gr.Blocks(title="Video Trim & Zoom", css="""
     _preview_js = """
     (zoom, px, py) => {
         const v = document.getElementById('test-video');
-        if (v) {
-            v.style.transform = `scale(${zoom}) translate(${-px * 30}%, ${-py * 30}%)`;
+        const crop = document.getElementById('video-crop');
+        if (v && crop) {
+            // Scale the video but keep the container at original size (clips the overflow)
+            v.style.transform = `scale(${zoom}) translate(${-px * (1 - 1/zoom) * 50}%, ${-py * (1 - 1/zoom) * 50}%)`;
+            // Fix container height so controls stay below
+            if (!crop.dataset.origHeight) {
+                crop.dataset.origHeight = crop.offsetHeight;
+            }
+            crop.style.height = crop.dataset.origHeight + 'px';
         }
         return [zoom, px, py];
     }
@@ -203,9 +186,38 @@ with gr.Blocks(title="Video Trim & Zoom", css="""
         outputs=[output_file, status_box],
     )
 
-    # Apply initial preview transform on load
     demo.load(js="""
     () => {
+        function fitLayout() {
+            const video = document.getElementById('test-video');
+            const crop = document.getElementById('video-crop');
+            if (!video || !crop) { setTimeout(fitLayout, 300); return; }
+
+            function resize() {
+                // Measure space taken by everything except the video
+                const cropRect = crop.getBoundingClientRect();
+                const usedBelow = window.innerHeight - cropRect.top;
+                let controlsHeight = 0;
+                // Walk siblings after the video block to measure controls
+                let el = crop.closest('[id=video-block]');
+                if (el) {
+                    let sib = el.nextElementSibling;
+                    while (sib) {
+                        controlsHeight += sib.getBoundingClientRect().height + 4;
+                        sib = sib.nextElementSibling;
+                    }
+                }
+                const available = window.innerHeight - cropRect.top - controlsHeight - 16;
+                crop.style.maxHeight = Math.max(80, available) + 'px';
+                video.style.maxHeight = crop.style.maxHeight;
+            }
+
+            resize();
+            window.addEventListener('resize', resize);
+            new ResizeObserver(resize).observe(document.body);
+        }
+        fitLayout();
+
         // Enforce trim range on video playback
         setInterval(() => {
             const v = document.getElementById('test-video');
