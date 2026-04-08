@@ -183,7 +183,7 @@ def test_check_for_errors_dom_errors_found(mock_async_pw):
     assert result.passed is False
     assert result.details["error_count"] == 1
     assert "Something went wrong" in result.details["errors_found"][0]["text"]
-    assert "Found 1 error(s) on page" in result.error
+    assert "Found 1 DOM error(s) and 0 console error(s)" == result.error
 
 
 @patch("gradio_tester.screenshot._PLAYWRIGHT_AVAILABLE", True)
@@ -267,6 +267,30 @@ def test_check_for_errors_navigation_failure(mock_async_pw):
 
     assert result.passed is False
     assert "Timeout" in result.error
+
+
+@patch("gradio_tester.screenshot._PLAYWRIGHT_AVAILABLE", True)
+@patch("gradio_tester.screenshot.async_playwright", create=True)
+def test_check_for_errors_console_errors_fail_check(mock_async_pw):
+    page = _make_mock_page()
+    browser = _make_mock_browser(page)
+    mock_async_pw.return_value = _make_mock_playwright(browser)
+
+    def register_console_handler(_event, handler):
+        msg = MagicMock()
+        msg.type = "error"
+        msg.text = "Unhandled TypeError"
+        handler(msg)
+
+    page.on.side_effect = register_console_handler
+
+    from gradio_tester.screenshot import check_for_errors
+
+    result = check_for_errors("https://test.gradio.live")
+
+    assert result.passed is False
+    assert result.details["console_errors"] == ["Unhandled TypeError"]
+    assert "console error" in result.error
 
 
 @patch("gradio_tester.screenshot._PLAYWRIGHT_AVAILABLE", True)

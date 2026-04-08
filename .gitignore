@@ -8,3 +8,4 @@ build/
 *.png
 screenshot*.png
 .claude/
+tmp_snap_test_media/

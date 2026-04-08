@@ -167,3 +167,34 @@ def test_check_output_variance_connection_error(MockClient):
     )
     assert result.passed is False
     assert "Refused" in result.error
+
+
+@patch("gradio_client.Client")
+def test_list_endpoints_passes_timeout_to_client(MockClient):
+    mock_client = MagicMock()
+    MockClient.return_value = mock_client
+    mock_client.view_api.return_value = {
+        "named_endpoints": {},
+        "unnamed_endpoints": {},
+    }
+
+    list_endpoints("https://test.gradio.live", timeout=12.5)
+
+    MockClient.assert_called_once_with(
+        "https://test.gradio.live",
+        httpx_kwargs={"timeout": 12.5},
+    )
+
+
+@patch("gradio_client.Client")
+def test_call_endpoint_passes_timeout_to_client(MockClient):
+    mock_client = MagicMock()
+    MockClient.return_value = mock_client
+    mock_client.predict.return_value = "ok"
+
+    call_endpoint("https://test.gradio.live", timeout=7.0)
+
+    MockClient.assert_called_once_with(
+        "https://test.gradio.live",
+        httpx_kwargs={"timeout": 7.0},
+    )

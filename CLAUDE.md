@@ -22,13 +22,13 @@ pip install -e ".[dev,screenshot]"
 playwright install chromium
 
 # Run all tests (101 tests, requires ffmpeg)
-pytest tests/ -v
+PYTHONPATH=src pytest tests/ -v
 
 # Run a single test file
-pytest tests/test_health.py -v
+PYTHONPATH=src pytest tests/test_health.py -v
 
 # Run a single test
-pytest tests/test_health.py::test_health_reachable_success -v
+PYTHONPATH=src pytest tests/test_health.py::test_health_reachable_success -v
 
 # Run the demo Gradio app (serves RGB test video on localhost:7860)
 python app.py
@@ -37,6 +37,34 @@ python app.py
 gradio-tester https://abc123.gradio.live
 gradio-tester https://abc123.gradio.live --json
 ```
+
+## Snap Media Browser Runbook
+
+Use this when working on `snap_media_browser.py`.
+
+```bash
+# Launch locally against a real media folder
+SNAP_MEDIA_ROOT=/absolute/path/to/media \
+SNAP_THUMB_DIR=/absolute/path/to/thumb-cache \
+SNAP_SHARE=0 \
+GRADIO_SERVER_PORT=8905 \
+conda run -n gradio-tester python snap_media_browser.py
+
+# App-specific tests
+PYTHONPATH=src conda run -n gradio-tester pytest -q tests/test_snap_media_browser.py
+
+# Full suite
+PYTHONPATH=src conda run -n gradio-tester pytest -q
+```
+
+Expected manual checks:
+
+- Click an image tile and confirm the lightbox opens
+- Click next/prev and confirm exactly one item of movement per click
+- Delete an item and confirm the grid updates
+- Refresh the browser and confirm deleted media does not reappear
+
+For local manual testing, prefer a throwaway folder under the repo such as `tmp_snap_test_media/`, populated with filenames that include spaces and quotes.
 
 ## Architecture
 
@@ -103,3 +131,4 @@ gradio-tester <url> --interact '[
 - Python ≥ 3.10 required
 - When you discover a Gradio pattern, workaround, or gotcha, **add it to `GRADIO_NOTES.md`** — this is the project's knowledge base and should grow over time
 - See `GRADIO_NOTES.md` for existing Gradio-specific patterns, workarounds, and lessons learned
+- For browser-driven debugging, prefer a real Playwright click flow over endpoint-only checks. The Snap Media Browser click/lightbox bug passed launch and file-serving checks but failed immediately under a real tile click.

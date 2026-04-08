@@ -8,13 +8,18 @@ from typing import Any
 from gradio_tester.models import TestResult
 
 
+def _make_client(url: str, timeout: float) -> Any:
+    """Create a Gradio client with a consistent HTTP timeout."""
+    from gradio_client import Client
+
+    return Client(url, httpx_kwargs={"timeout": timeout})
+
+
 def list_endpoints(url: str, timeout: float = 30.0) -> TestResult:
     """Connect to a Gradio app and list its API endpoints."""
     start = time.monotonic()
     try:
-        from gradio_client import Client
-
-        client = Client(url)
+        client = _make_client(url, timeout)
         # view_api returns info dict; print_info=False suppresses stdout
         api_info = client.view_api(print_info=False, return_format="dict")
         elapsed = (time.monotonic() - start) * 1000
@@ -64,9 +69,7 @@ def call_endpoint(
     """Call a specific Gradio API endpoint and validate the response."""
     start = time.monotonic()
     try:
-        from gradio_client import Client
-
-        client = Client(url)
+        client = _make_client(url, timeout)
         args = inputs or []
         result = client.predict(*args, api_name=api_name)
         elapsed = (time.monotonic() - start) * 1000
@@ -141,9 +144,7 @@ def check_output_variance(
     """
     start = time.monotonic()
     try:
-        from gradio_client import Client
-
-        client = Client(url)
+        client = _make_client(url, timeout)
         calls = []
         outputs = set()
 

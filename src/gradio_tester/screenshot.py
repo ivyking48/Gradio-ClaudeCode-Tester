@@ -88,6 +88,11 @@ async def _check_for_errors_async(
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page(viewport={"width": viewport[0], "height": viewport[1]})
+            console_errors = []
+            page.on(
+                "console",
+                lambda msg: console_errors.append(msg.text) if msg.type == "error" else None,
+            )
 
             await page.goto(url, wait_until="networkidle", timeout=timeout_ms)
 
@@ -107,23 +112,24 @@ async def _check_for_errors_async(
                             "text": text.strip()[:200],
                         })
 
-            # Also check for console errors
-            console_errors = []
-            page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
-
             await browser.close()
             elapsed = (time.monotonic() - start) * 1000
+            failure_count = len(errors_found) + len(console_errors)
 
             return TestResult(
                 name="screenshot_error_check",
-                passed=len(errors_found) == 0,
+                passed=failure_count == 0,
                 duration_ms=elapsed,
                 details={
                     "errors_found": errors_found,
                     "error_count": len(errors_found),
                     "console_errors": console_errors[:10],
                 },
-                error=f"Found {len(errors_found)} error(s) on page" if errors_found else None,
+                error=(
+                    f"Found {len(errors_found)} DOM error(s) and {len(console_errors)} console error(s)"
+                    if failure_count
+                    else None
+                ),
             )
     except Exception as e:
         elapsed = (time.monotonic() - start) * 1000

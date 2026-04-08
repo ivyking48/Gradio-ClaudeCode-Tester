@@ -22,7 +22,11 @@ except ImportError:
     MEDIA_ROOT = os.path.expanduser("~/SnapInsta_Downloads")
     THUMB_DIR = os.path.join("/tmp", "_snap_thumbs")
 
+MEDIA_ROOT = os.environ.get("SNAP_MEDIA_ROOT", MEDIA_ROOT)
+THUMB_DIR = os.environ.get("SNAP_THUMB_DIR", THUMB_DIR)
+
 PAGE_SIZE = 60
+ENABLE_SHARE = os.environ.get("SNAP_SHARE", "1").lower() not in {"0", "false", "no"}
 
 os.makedirs(MEDIA_ROOT, exist_ok=True)
 os.makedirs(THUMB_DIR, exist_ok=True)
@@ -77,10 +81,14 @@ def pil_to_b64(img, size=220, quality=65):
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
-def make_video_thumb_pil(video_path):
-    cached = os.path.join(
+def thumb_cache_path(video_path):
+    return os.path.join(
         THUMB_DIR, hashlib.md5(video_path.encode()).hexdigest()[:12] + ".jpg"
     )
+
+
+def make_video_thumb_pil(video_path):
+    cached = thumb_cache_path(video_path)
     if not os.path.exists(cached):
         try:
             subprocess.run(
@@ -127,6 +135,26 @@ def make_video_thumb_pil(video_path):
         )
         d.text((rx + p, ry + p), dt, fill=(255, 255, 255, 240), font=font)
     return Image.alpha_composite(img, ov).convert("RGB")
+
+
+def delete_media_file(path):
+    """Delete a media file under MEDIA_ROOT and its cached thumbnail if present."""
+    real = os.path.realpath(path)
+    root = os.path.realpath(MEDIA_ROOT)
+    if not (real == root or real.startswith(root + os.sep)):
+        raise ValueError("Refusing to delete path outside media root")
+    if not os.path.exists(real):
+        raise FileNotFoundError("File not found")
+    if os.path.isdir(real):
+        raise IsADirectoryError("Delete only supports files")
+
+    if Path(real).suffix.lower() in VID_EXT:
+        cached = thumb_cache_path(real)
+        if os.path.exists(cached):
+            os.remove(cached)
+
+    os.remove(real)
+    return f"Deleted {os.path.basename(real)}"
 
 
 # ============================================================
@@ -201,7 +229,8 @@ class State:
         return d, i, v
 
 
-state = State()
+def new_state():
+    return State()
 
 # ============================================================
 # gr.HTML CUSTOM COMPONENT — template, css, js
@@ -218,6 +247,8 @@ GRID_CSS = """\
      background: #1a1d27; border: 1px solid #2a2d3a; transition: .15s; }
 .c:hover { border-color: #7c6cf0; transform: translateY(-2px); }
 .c img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+.c .ph { width: 100%; aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+         background: linear-gradient(135deg, #242837, #171a23); color: #7f859c; font-size: 11px; }
 .c .nm { padding: 3px 6px; font-size: 10px; color: #aaa;
          white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
@@ -273,14 +304,75 @@ GRID_JS = """\
         return d.innerHTML;
     }
 
+    function eventTouchesElement(event) {
+        var path = event.composedPath ? event.composedPath() : [];
+        for (var i = 0; i < path.length; i++) {
+            if (path[i] === element) return true;
+        }
+        return element.contains(event.target);
+    }
+
+    function handleAction(action) {
+        var media = getMedia();
+        if (action === 'x') closeLB();
+        else if (action === 'p') { idx = (idx - 1 + media.length) % media.length; openLB(); }
+        else if (action === 'n') { idx = (idx + 1) % media.length; openLB(); }
+        else if (action === 'del' && media[idx]) {
+            if (!window.confirm('Delete "' + media[idx].n + '"?')) return;
+            fetch('/gradio_api/run/delete_file', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ data: [media[idx].u] })
+            }).then(function(resp) {
+                if (!resp.ok) throw new Error('Delete request failed: ' + resp.status);
+                return resp.json();
+            }).then(function() {
+                window.location.reload();
+            }).catch(function(err) {
+                window.alert('Delete failed: ' + err.message);
+            });
+        }
+        else if (action === 'd' && media[idx]) {
+            var dl = document.createElement('a');
+            dl.href = '/gradio_api/file=' + media[idx].u.split('/').map(encodeURIComponent).join('/');
+            dl.download = media[idx].n;
+            dl.click();
+        }
+    }
+
+    function wireGridCards() {
+        element.querySelectorAll('[data-i]').forEach(function(card) {
+            if (card.dataset.snapBound === '1') return;
+            card.dataset.snapBound = '1';
+            card.addEventListener('click', function(event) {
+                if (!eventTouchesElement(event)) return;
+                element.dataset.snapLastClick = card.dataset.i;
+                idx = parseInt(card.dataset.i, 10);
+                openLB();
+            });
+        });
+    }
+
+    function wireLightboxControls(lb) {
+        lb.querySelectorAll('[data-a]').forEach(function(btn) {
+            if (btn.dataset.snapBound === '1') return;
+            btn.dataset.snapBound = '1';
+            btn.addEventListener('click', function(event) {
+                if (!eventTouchesElement(event)) return;
+                handleAction(btn.dataset.a);
+            });
+        });
+    }
+
     function loadBlob(path) {
+        var encodedPath = path.split('/').map(encodeURIComponent).join('/');
         var urls = [
-            '/gradio_api/file=' + path,
-            '/file=' + path,
-            '/file/' + path
+            '/gradio_api/file=' + encodedPath,
+            '/file=' + encodedPath,
+            '/file/' + encodedPath
         ];
         function tryNext(i) {
-            if (i >= urls.length) return Promise.resolve('/gradio_api/file=' + path);
+            if (i >= urls.length) return Promise.resolve('/gradio_api/file=' + encodedPath);
             return fetch(urls[i], { credentials: 'include' }).then(function(r) {
                 if (r.ok) return r.blob().then(function(b) {
                     var u = URL.createObjectURL(b);
@@ -303,11 +395,14 @@ GRID_JS = """\
             lb.remove();
         }
         idx = -1;
+        element.dataset.snapLbOpen = '0';
     }
 
     function openLB() {
+        var targetIdx = idx;
         closeLB();
         var media = getMedia();
+        idx = targetIdx;
         if (idx < 0 || idx >= media.length) return;
         var m = media[idx];
         var lb = document.createElement('div');
@@ -319,13 +414,16 @@ GRID_JS = """\
             '<div class="tp"><div class="ti">' + esc(m.n) + '</div>' +
             '<div class="b" data-a="p">&#9664;</div>' +
             '<div class="b" data-a="n">&#9654;</div>' +
+            '<div class="b" data-a="del">&#128465;</div>' +
             '<div class="b" data-a="d">&#11015;</div>' +
             '<div class="b" data-a="x">&#10005;</div></div>' +
             '<div class="bd">' + navP +
             '<div style="color:#888">Loading\\u2026</div>' + navN + '</div>' +
             '<div class="ct">' + (idx + 1) + '/' + media.length + '</div>';
         element.appendChild(lb);
+        wireLightboxControls(lb);
         var bd = lb.querySelector('.bd');
+        element.dataset.snapLbOpen = '1';
         loadBlob(m.u).then(function(src) {
             if (m.t === 'i') {
                 bd.innerHTML = navP + '<img src="' + src + '">' + navN;
@@ -333,32 +431,9 @@ GRID_JS = """\
                 bd.innerHTML = navP +
                     '<video src="' + src + '" controls autoplay playsinline></video>' + navN;
             }
+            wireLightboxControls(lb);
         });
     }
-
-    /* --- Event delegation (persists across re-renders) --- */
-    element.addEventListener('click', function(e) {
-        var card = e.target.closest('[data-i]');
-        if (card) {
-            idx = parseInt(card.dataset.i, 10);
-            openLB();
-            return;
-        }
-        var btn = e.target.closest('[data-a]');
-        if (btn) {
-            var a = btn.dataset.a;
-            var media = getMedia();
-            if (a === 'x') closeLB();
-            else if (a === 'p') { idx = (idx - 1 + media.length) % media.length; openLB(); }
-            else if (a === 'n') { idx = (idx + 1) % media.length; openLB(); }
-            else if (a === 'd' && media[idx]) {
-                var dl = document.createElement('a');
-                dl.href = '/gradio_api/file=' + media[idx].u;
-                dl.download = media[idx].n;
-                dl.click();
-            }
-        }
-    });
 
     /* --- Keyboard navigation --- */
     document.addEventListener('keydown', function(e) {
@@ -383,18 +458,23 @@ GRID_JS = """\
                 blobs.forEach(function(u) { URL.revokeObjectURL(u); });
                 blobs = [];
                 element.dataset.snapMediaCount = getMedia().length;
+                wireGridCards();
             });
         }
     } catch(e) {
         console.warn('[SNAP] watch() not available:', e.message);
     }
+    new MutationObserver(function() {
+        wireGridCards();
+    }).observe(element, { childList: true, subtree: true });
+    setTimeout(wireGridCards, 0);
 })();
 """
 
 # ============================================================
 # GRID VALUE BUILDER
 # ============================================================
-def build_grid_value():
+def build_grid_value(state):
     t0 = time.time()
     items = state.page_entries
     cards_html = ""
@@ -418,9 +498,12 @@ def build_grid_value():
                 pass
             media_list.append({"t": "v", "n": name, "u": full})
         lbl = html_mod.escape(name) if ft == "image" else "\U0001f3ac " + html_mod.escape(name)
+        preview_html = (
+            f'<img src="{thumb}">' if thumb else f'<div class="ph">{ft.upper()}</div>'
+        )
         cards_html += (
             f'<div class="c" data-i="{idx}">'
-            f'<img src="{thumb}">'
+            f"{preview_html}"
             f'<div class="nm">{lbl}</div>'
             f'</div>'
         )
@@ -439,7 +522,7 @@ def build_grid_value():
 # ============================================================
 # EVENTS
 # ============================================================
-def full_refresh():
+def full_refresh(state):
     d, i, v = state.counts()
     status = (
         f"\U0001f4c2 **{state.rel}** \u2014 {len(state.all_entries)} items "
@@ -447,95 +530,117 @@ def full_refresh():
         f"Page {state.page + 1}/{state.pages}"
     )
     folders = gr.Dropdown(choices=[f[0] for f in state.folders], value=None)
-    grid_val = build_grid_value()
-    return status, folders, grid_val
+    grid_val = build_grid_value(state)
+    return status, folders, grid_val, state
 
 
-def on_nav(name):
+def on_nav(state, name):
     if name:
         state.navigate(name)
-    return full_refresh()
+    return full_refresh(state)
 
 
-def on_up():
+def on_up(state):
     state.go_up()
-    return full_refresh()
+    return full_refresh(state)
 
 
-def on_home():
+def on_home(state):
     state.go_home()
-    return full_refresh()
+    return full_refresh(state)
 
 
-def on_prev():
+def on_prev(state):
     if state.page > 0:
         state.page -= 1
-    return full_refresh()
+    return full_refresh(state)
 
 
-def on_next():
+def on_next(state):
     if state.page < state.pages - 1:
         state.page += 1
-    return full_refresh()
+    return full_refresh(state)
+
+
+def api_delete_file(path):
+    return delete_media_file(path)
+
+
+def init_session(_state=None):
+    return full_refresh(new_state())
 
 
 # ============================================================
 # UI
 # ============================================================
-print("[DEBUG] Building UI...")
+def build_demo(initial_state=None):
+    """Create the Gradio demo without launching it."""
+    print("[DEBUG] Building UI...")
+    initial_state = initial_state or new_state()
+    initial_status = "\U0001f4c2 **Loading...**"
 
-d0, i0, v0 = state.counts()
-_initial_status = (
-    f"\U0001f4c2 **{state.rel}** \u2014 {len(state.all_entries)} items "
-    f"({d0} folders, {i0} images, {v0} videos) \u2014 "
-    f"Page {state.page + 1}/{state.pages}"
-)
+    with gr.Blocks(title="Snap Media Browser") as demo:
+        gr.Markdown("# \u26a1 Snap Media Browser")
+        browser_state = gr.State(None)
+        delete_path = gr.Textbox(visible=False)
+        delete_result = gr.Textbox(visible=False)
 
-with gr.Blocks(title="Snap Media Browser") as demo:
-    gr.Markdown("# \u26a1 Snap Media Browser")
+        with gr.Row():
+            btn_home = gr.Button("\U0001f3e0 Home", size="sm", scale=0)
+            btn_up = gr.Button("\u2b06\ufe0f Up", size="sm", scale=0)
+            status = gr.Markdown(initial_status)
 
-    with gr.Row():
-        btn_home = gr.Button("\U0001f3e0 Home", size="sm", scale=0)
-        btn_up = gr.Button("\u2b06\ufe0f Up", size="sm", scale=0)
-        status = gr.Markdown(_initial_status)
+        folder_dd = gr.Dropdown(
+            label="\U0001f4c1 Open folder",
+            choices=[],
+            value=None,
+            interactive=True,
+        )
 
-    folder_dd = gr.Dropdown(
-        label="\U0001f4c1 Open folder",
-        choices=[f[0] for f in state.folders],
-        value=None,
-        interactive=True,
+        with gr.Row():
+            btn_p = gr.Button("\u25c0 Prev Page", size="sm")
+            btn_n = gr.Button("Next Page \u25b6", size="sm")
+
+        grid = gr.HTML(
+            value={"html": '<div class="empty">Loading\u2026</div>', "media": []},
+            html_template=GRID_TEMPLATE,
+            css_template=GRID_CSS,
+            js_on_load=GRID_JS,
+            apply_default_css=False,
+            container=False,
+            padding=False,
+            show_label=False,
+        )
+
+        outs = [status, folder_dd, grid, browser_state]
+        folder_dd.input(on_nav, inputs=[browser_state, folder_dd], outputs=outs)
+        btn_up.click(on_up, inputs=[browser_state], outputs=outs)
+        btn_home.click(on_home, inputs=[browser_state], outputs=outs)
+        btn_p.click(on_prev, inputs=[browser_state], outputs=outs)
+        btn_n.click(on_next, inputs=[browser_state], outputs=outs)
+        delete_path.submit(
+            api_delete_file,
+            inputs=[delete_path],
+            outputs=[delete_result],
+            api_name="delete_file",
+            queue=False,
+        )
+        demo.load(fn=init_session, inputs=[browser_state], outputs=outs)
+
+    return demo
+
+
+def launch_app():
+    """Launch the browser app."""
+    print("[DEBUG] Launching...")
+    demo = build_demo()
+    demo.launch(
+        debug=True, share=ENABLE_SHARE, quiet=False, height=900,
+        allowed_paths=[MEDIA_ROOT, THUMB_DIR],
+        theme=gr.themes.Base(primary_hue="purple", neutral_hue="slate"),
+        css="footer{display:none!important}",
     )
 
-    with gr.Row():
-        btn_p = gr.Button("\u25c0 Prev Page", size="sm")
-        btn_n = gr.Button("Next Page \u25b6", size="sm")
 
-    grid = gr.HTML(
-        value=build_grid_value(),
-        html_template=GRID_TEMPLATE,
-        css_template=GRID_CSS,
-        js_on_load=GRID_JS,
-        apply_default_css=False,
-        container=False,
-        padding=False,
-        show_label=False,
-    )
-
-    outs = [status, folder_dd, grid]
-    folder_dd.input(on_nav, inputs=[folder_dd], outputs=outs)
-    btn_up.click(on_up, outputs=outs)
-    btn_home.click(on_home, outputs=outs)
-    btn_p.click(on_prev, outputs=outs)
-    btn_n.click(on_next, outputs=outs)
-    demo.load(fn=full_refresh, outputs=outs)
-
-# ============================================================
-# LAUNCH
-# ============================================================
-print("[DEBUG] Launching...")
-demo.launch(
-    debug=True, share=True, quiet=False, height=900,
-    allowed_paths=[MEDIA_ROOT, THUMB_DIR],
-    theme=gr.themes.Base(primary_hue="purple", neutral_hue="slate"),
-    css="footer{display:none!important}",
-)
+if __name__ == "__main__":
+    launch_app()

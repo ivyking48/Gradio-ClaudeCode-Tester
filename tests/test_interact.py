@@ -132,6 +132,30 @@ def test_click_action_success(mock_async_pw):
     loc.click.assert_awaited_once()
 
 
+@patch("gradio_tester.interact._PLAYWRIGHT_AVAILABLE", True)
+@patch("gradio_tester.interact.async_playwright", create=True)
+def test_click_action_fails_when_app_never_goes_idle(mock_async_pw):
+    page, loc = _make_mock_page()
+    busy_loc = _make_mock_locator()
+    busy_loc.count = AsyncMock(return_value=1)
+    page.locator = MagicMock(return_value=busy_loc)
+    browser = _make_mock_browser(page)
+    mock_async_pw.return_value = _make_mock_playwright(browser)
+
+    from gradio_tester.interact import execute_actions
+
+    results = execute_actions(
+        "https://test.gradio.live",
+        [{"action": "click", "label": "Check Color"}],
+        timeout_ms=10,
+    )
+
+    assert len(results) == 1
+    assert results[0].passed is False
+    assert "stayed busy" in results[0].error
+    loc.click.assert_awaited_once()
+
+
 # ---------------------------------------------------------------------------
 # Verify action
 # ---------------------------------------------------------------------------

@@ -144,6 +144,38 @@ You can also clear Gradio's temp file cache:
 rm -rf /private/var/folders/*/T/gradio/   # macOS
 ```
 
+## Session Snapshot Pitfall
+
+If a Gradio app stores a startup-time directory listing in module-level state and then seeds each browser session from that snapshot, reloads can resurrect deleted files in the UI even though the files are already gone on disk. In the Snap Media Browser this showed up as a black placeholder tile that still looked playable after delete.
+
+What works:
+
+- Build a fresh per-session state object on `demo.load()`
+- Re-scan the media directory from disk when the session starts
+- Treat delete as both a filesystem change and a session-state invalidation event
+
+What doesn't work:
+
+- Reusing a process-wide `State()` instance as the source of truth for new sessions
+- Assuming `window.location.reload()` is enough if the backend session still hydrates from stale in-memory data
+
+## Custom HTML Click Wiring
+
+Gradio can render custom `gr.HTML` content correctly while the embedded interaction logic is still broken. In the Snap Media Browser, the media grid appeared fine and files were served correctly, but clicking a tile did nothing because the lightbox state was being reset during open and the click handlers were too fragile.
+
+What works:
+
+- Bind direct DOM listeners to the rendered card elements after the grid is in the document
+- Re-bind after Gradio re-renders custom HTML, or use a `MutationObserver` to wire newly rendered cards
+- Keep lightbox open/close state transitions minimal; if `open` needs to clear prior UI state, preserve the target index explicitly
+- Add a real browser test that clicks a tile and verifies the lightbox is visible
+
+What doesn't work:
+
+- Assuming launch, API, and file-serving checks prove the frontend is interactive
+- Registering brittle handlers once at startup when the underlying HTML can be replaced by Gradio re-renders
+- Calling a shared `close` routine from `open` if that routine also clears the item index needed to display the new selection
+
 ## CSS Transform Preview for Zoom/Pan
 
 ### The Pattern

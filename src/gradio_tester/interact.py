@@ -37,6 +37,7 @@ async def _wait_for_gradio_idle(page: Any, timeout_ms: int = 10000) -> None:
         if not busy:
             return
         await asyncio.sleep(0.1)
+    raise TimeoutError(f"Gradio stayed busy for more than {timeout_ms}ms")
 
 
 async def _do_fill(page: Any, action: dict, timeout_ms: int) -> TestResult:

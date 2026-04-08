@@ -90,10 +90,58 @@ python app.py
 
 Serves a 10-second RGB test video (red → blue → green) with a color-check endpoint.
 
+## Snap Media Browser
+
+The repo also includes a single-cell-style media browser app for local folders or Colab-mounted Drive media:
+
+```bash
+conda run -n gradio-tester python snap_media_browser.py
+```
+
+Useful environment overrides:
+
+```bash
+SNAP_MEDIA_ROOT=/path/to/media
+SNAP_THUMB_DIR=/path/to/thumb-cache
+SNAP_SHARE=0
+GRADIO_SERVER_PORT=8905
+```
+
+Current behavior:
+
+- Images and videos render in the same grid
+- Clicking a tile opens a lightbox with next/prev controls
+- Video thumbnails are cached under `THUMB_DIR`
+- Files can be deleted from the lightbox
+- Delete is limited to files under `MEDIA_ROOT`
+- Deleting a video also removes its cached thumbnail
+- A browser refresh now reloads the media listing from disk, so deleted items do not come back as stale placeholders
+
+Automated coverage for this app lives in `tests/test_snap_media_browser.py` and includes launch checks, browser click flow, delete API coverage, and stale-session regression coverage.
+
+Manual and automated test protocol used during debugging:
+
+```bash
+# Launch against a local fixture folder
+SNAP_MEDIA_ROOT=/absolute/path/to/media \
+SNAP_THUMB_DIR=/absolute/path/to/thumb-cache \
+SNAP_SHARE=0 \
+GRADIO_SERVER_PORT=8905 \
+conda run -n gradio-tester python snap_media_browser.py
+
+# App-specific tests
+PYTHONPATH=src conda run -n gradio-tester pytest -q tests/test_snap_media_browser.py
+
+# Full suite
+PYTHONPATH=src conda run -n gradio-tester pytest -q
+```
+
+During browser debugging, use a real Playwright click flow against the live app. Endpoint checks alone were not enough to catch the original lightbox click bug.
+
 ## Running Tests
 
 ```bash
-pytest tests/ -v
+PYTHONPATH=src pytest tests/ -v
 ```
 
 ## License
