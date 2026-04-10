@@ -10,7 +10,7 @@ Changes from v10:
 - Guarded google.colab import so it can also run locally for development
 """
 
-import os, sys, time, subprocess, hashlib, base64, io, json, html as html_mod
+import os, sys, time, subprocess, hashlib, base64, io, json, html as html_mod, inspect
 
 # --- Colab drive mount (guarded for local dev) ---
 try:
@@ -54,6 +54,35 @@ except ImportError as exc:
         "Pillow is not installed. Install Pillow>=11 before running "
         "snap_media_browser.py."
     ) from exc
+
+
+def _debug(msg):
+    if os.environ.get("SNAP_DEBUG", "1").lower() not in {"0", "false", "no"}:
+        print(f"[DEBUG] {msg}")
+
+
+def log_runtime_diagnostics():
+    try:
+        html_sig = str(inspect.signature(gr.HTML.__init__))
+    except Exception as exc:
+        html_sig = f"<unavailable: {exc}>"
+    _debug(f"python={sys.version.split()[0]} executable={sys.executable}")
+    _debug(f"gradio={getattr(gr, '__version__', 'unknown')}")
+    _debug(f"pillow={getattr(Image, '__version__', 'unknown')}")
+    _debug(f"html_init={html_sig}")
+    _debug(
+        "env share=%s skip_mount=%s media_root=%s thumb_dir=%s"
+        % (
+            os.environ.get("SNAP_SHARE", "<unset>"),
+            os.environ.get("SNAP_SKIP_COLAB_MOUNT", "<unset>"),
+            MEDIA_ROOT,
+            THUMB_DIR,
+        )
+    )
+    _debug(f"media_root_exists={os.path.isdir(MEDIA_ROOT)} thumb_dir_exists={os.path.isdir(THUMB_DIR)}")
+
+
+log_runtime_diagnostics()
 
 # ============================================================
 # HELPERS
@@ -743,9 +772,36 @@ def init_session(_state=None):
 # ============================================================
 def build_demo(initial_state=None):
     """Create the Gradio demo without launching it."""
-    print("[DEBUG] Building UI...")
+    _debug("Building UI...")
     initial_state = initial_state or new_state()
     initial_status = "\U0001f4c2 **Loading...**"
+
+    html_kwargs = {
+        "value": {"html": '<div class="empty">Loading\u2026</div>', "media": []},
+        "container": False,
+        "padding": False,
+        "show_label": False,
+    }
+    try:
+        html_params = inspect.signature(gr.HTML.__init__).parameters
+    except Exception:
+        html_params = {}
+    required_custom_args = {"html_template", "css_template", "js_on_load"}
+    missing = [name for name in required_custom_args if name not in html_params]
+    if missing:
+        raise RuntimeError(
+            "This app requires a newer Gradio HTML component API. Missing parameters on "
+            f"gr.HTML: {', '.join(missing)}. Installed gradio={getattr(gr, '__version__', 'unknown')}. "
+            "Use the Colab notebook's isolated environment setup or install gradio>=6 in a dedicated env."
+        )
+    html_kwargs.update(
+        {
+            "html_template": GRID_TEMPLATE,
+            "css_template": GRID_CSS,
+            "js_on_load": GRID_JS,
+            "apply_default_css": False,
+        }
+    )
 
     with gr.Blocks(title="Snap Media Browser") as demo:
         gr.Markdown("# \u26a1 Snap Media Browser")
@@ -769,16 +825,7 @@ def build_demo(initial_state=None):
             btn_p = gr.Button("\u25c0 Prev Page", size="sm")
             btn_n = gr.Button("Next Page \u25b6", size="sm")
 
-        grid = gr.HTML(
-            value={"html": '<div class="empty">Loading\u2026</div>', "media": []},
-            html_template=GRID_TEMPLATE,
-            css_template=GRID_CSS,
-            js_on_load=GRID_JS,
-            apply_default_css=False,
-            container=False,
-            padding=False,
-            show_label=False,
-        )
+        grid = gr.HTML(**html_kwargs)
 
         outs = [status, folder_dd, grid, browser_state]
         folder_dd.input(on_nav, inputs=[browser_state, folder_dd], outputs=outs)
@@ -800,7 +847,7 @@ def build_demo(initial_state=None):
 
 def launch_app():
     """Launch the browser app."""
-    print("[DEBUG] Launching...")
+    _debug("Launching...")
     demo = build_demo()
     demo.launch(
         debug=True, share=ENABLE_SHARE, quiet=False, height=900,
