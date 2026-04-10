@@ -119,6 +119,8 @@ Current behavior:
 
 Automated coverage for this app lives in `tests/test_snap_media_browser.py` and includes launch checks, browser click flow, delete API coverage, and stale-session regression coverage.
 
+For Colab usage, the repo also includes [Snap_Media_Browser_Colab.ipynb](/Users/ivanacoronado/Documents/Projects/Gradio-ClaudeCode-Tester/Snap_Media_Browser_Colab.ipynb), which clones the repo, mounts Drive, and launches the app against a chosen folder.
+
 Manual and automated test protocol used during debugging:
 
 ```bash

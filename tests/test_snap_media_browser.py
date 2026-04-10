@@ -31,8 +31,26 @@ def _load_module(module_name: str = "snap_media_browser_under_test"):
 
 
 def _write_test_image(path: Path, color: tuple[int, int, int]) -> None:
-    img = Image.new("RGB", (24, 24), color)
+    img = Image.new("RGB", (1600, 1200), color)
     img.save(path)
+
+
+def _write_test_video(path: Path) -> None:
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=blue:s=1280x720:d=1",
+            "-pix_fmt",
+            "yuv420p",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+    )
 
 
 def _find_free_port() -> int:
@@ -247,6 +265,7 @@ def test_snap_media_browser_lightbox_click_flow(tmp_path):
     _write_test_image(media_root / " leading space.jpg", (255, 0, 0))
     _write_test_image(media_root / "quote'image.jpg", (0, 255, 0))
     _write_test_image(media_root / "plain.jpg", (0, 0, 255))
+    _write_test_video(media_root / "clip sample.mp4")
 
     with _running_app(media_root, thumb_dir) as base_url:
         with sync_playwright() as playwright:
@@ -256,30 +275,81 @@ def test_snap_media_browser_lightbox_click_flow(tmp_path):
             expect(page.locator(".c").first).to_be_visible()
 
             cards = page.locator(".c")
-            expect(cards).to_have_count(3)
+            expect(cards).to_have_count(4)
 
             cards.nth(0).click()
             host = page.locator('[data-snap-ready]')
             expect(host).to_have_attribute('data-snap-last-click', '0')
             expect(host).to_have_attribute('data-snap-lb-open', '1')
+            expect(host).to_have_attribute('data-snap-zoom', '1.00')
+            expect(host).to_have_attribute('data-snap-pan', '0.0,0.0')
             expect(page.locator(".lb")).to_be_visible()
             expect(page.locator(".lb .ti")).to_have_text(" leading space.jpg")
-            expect(page.locator(".lb .ct")).to_have_text("1/3")
+            expect(page.locator(".lb .ct")).to_have_text("1/4")
             expect(page.locator(".lb .bd img")).to_have_attribute("src", re.compile(r"^blob:"))
+            img_box = page.locator(".lb .bd img").bounding_box()
+            viewport_box = page.locator(".lb .bd .mv").bounding_box()
+            assert img_box is not None
+            assert viewport_box is not None
+            assert img_box["height"] <= viewport_box["height"] + 1
+            assert img_box["width"] <= viewport_box["width"] + 1
+
+            page.locator('.lb [data-a="zi"]').click()
+            expect(host).to_have_attribute('data-snap-zoom', '1.25')
+            expect(page.locator(".lb .zr")).to_have_text("125%")
+            page.locator(".lb .mv").drag_to(
+                page.locator(".lb .mv"),
+                source_position={"x": 200, "y": 200},
+                target_position={"x": 260, "y": 235},
+            )
+            expect(host).not_to_have_attribute('data-snap-pan', '0.0,0.0')
+
+            page.locator('.lb [data-a="zr"]').click()
+            expect(host).to_have_attribute('data-snap-zoom', '1.00')
+            expect(page.locator(".lb .zr")).to_have_text("100%")
+            expect(host).to_have_attribute('data-snap-pan', '0.0,0.0')
+
+            page.locator('.lb [data-a="n"]').first.click()
+            expect(page.locator(".lb .ti")).to_have_text("clip sample.mp4")
+            expect(page.locator(".lb .ct")).to_have_text("2/4")
+            expect(page.locator(".lb .bd video")).to_have_attribute("src", re.compile(r"^blob:"))
+            video_box = page.locator(".lb .bd video").bounding_box()
+            viewport_box = page.locator(".lb .bd .mv").bounding_box()
+            assert video_box is not None
+            assert viewport_box is not None
+            assert video_box["height"] <= viewport_box["height"] + 1
+            assert video_box["width"] <= viewport_box["width"] + 1
+
+            page.locator('.lb [data-a="zi"]').click()
+            expect(host).to_have_attribute('data-snap-zoom', '1.25')
+            expect(page.locator(".lb .zr")).to_have_text("125%")
+            page.locator(".lb .mv").drag_to(
+                page.locator(".lb .mv"),
+                source_position={"x": 210, "y": 210},
+                target_position={"x": 255, "y": 250},
+            )
+            expect(host).not_to_have_attribute('data-snap-pan', '0.0,0.0')
+
+            page.locator('.lb [data-a="zo"]').click()
+            expect(host).to_have_attribute('data-snap-zoom', '1.00')
+            expect(page.locator(".lb .zr")).to_have_text("100%")
+            expect(host).to_have_attribute('data-snap-pan', '0.0,0.0')
 
             page.locator('.lb [data-a="n"]').first.click()
             expect(page.locator(".lb .ti")).to_have_text("plain.jpg")
-            expect(page.locator(".lb .ct")).to_have_text("2/3")
+            expect(page.locator(".lb .ct")).to_have_text("3/4")
 
             page.locator('.lb [data-a="n"]').first.click()
             expect(page.locator(".lb .ti")).to_have_text("quote'image.jpg")
-            expect(page.locator(".lb .ct")).to_have_text("3/3")
+            expect(page.locator(".lb .ct")).to_have_text("4/4")
 
             page.locator('.lb [data-a="p"]').first.click()
             expect(page.locator(".lb .ti")).to_have_text("plain.jpg")
-            expect(page.locator(".lb .ct")).to_have_text("2/3")
+            expect(page.locator(".lb .ct")).to_have_text("3/4")
 
             page.locator('.lb [data-a="x"]').click()
             expect(page.locator(".lb")).to_have_count(0)
+            expect(host).to_have_attribute('data-snap-zoom', '1.00')
+            expect(host).to_have_attribute('data-snap-pan', '0.0,0.0')
 
             browser.close()

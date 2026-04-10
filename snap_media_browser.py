@@ -264,8 +264,16 @@ GRID_CSS = """\
 .lb .tp .b:hover { background: rgba(255,255,255,.1); }
 .lb .bd { flex: 1; display: flex; align-items: center; justify-content: center;
           overflow: hidden; position: relative; padding: 0 50px; }
-.lb .bd img { max-width: 100%; max-height: 100%; object-fit: contain; }
-.lb .bd video { max-width: 100%; max-height: 100%; background: #000; }
+.lb .bd .mv { width: 100%; height: 100%; overflow: hidden; display: flex;
+              align-items: center; justify-content: center; cursor: default; touch-action: none; }
+.lb .bd .mv.pn { cursor: grab; }
+.lb .bd .mv.dg { cursor: grabbing; }
+.lb .bd .mp { display: inline-flex; align-items: center; justify-content: center;
+              will-change: transform; }
+.lb .bd .mw { display: inline-flex; align-items: center; justify-content: center;
+              transform-origin: center center; will-change: transform; }
+.lb .bd img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
+.lb .bd video { display: block; max-width: 100%; max-height: 100%; object-fit: contain; background: #000; }
 .nv { position: absolute; top: 50%; transform: translateY(-50%);
       background: rgba(255,255,255,.1); border: none; color: #fff;
       width: 42px; height: 42px; border-radius: 50%; cursor: pointer;
@@ -286,6 +294,10 @@ GRID_JS = """\
 (function() {
     var idx = -1;
     var blobs = [];
+    var zoom = 1;
+    var panX = 0;
+    var panY = 0;
+    var drag = null;
 
     /* Debug marker — verify js_on_load executed */
     element.dataset.snapReady = '1';
@@ -317,6 +329,9 @@ GRID_JS = """\
         if (action === 'x') closeLB();
         else if (action === 'p') { idx = (idx - 1 + media.length) % media.length; openLB(); }
         else if (action === 'n') { idx = (idx + 1) % media.length; openLB(); }
+        else if (action === 'zi') setZoom(zoom + 0.25);
+        else if (action === 'zo') setZoom(zoom - 0.25);
+        else if (action === 'zr') setZoom(1);
         else if (action === 'del' && media[idx]) {
             if (!window.confirm('Delete "' + media[idx].n + '"?')) return;
             fetch('/gradio_api/run/delete_file', {
@@ -338,6 +353,135 @@ GRID_JS = """\
             dl.download = media[idx].n;
             dl.click();
         }
+    }
+
+    function clampPan() {
+        var lb = element.querySelector('.lb');
+        if (!lb) return;
+        var viewport = lb.querySelector('.mv');
+        var wrap = lb.querySelector('.mw');
+        if (!viewport || !wrap) return;
+        var baseW = parseFloat(wrap.dataset.baseWidth || '0');
+        var baseH = parseFloat(wrap.dataset.baseHeight || '0');
+        if (!baseW || !baseH) {
+            var fallback = wrap.getBoundingClientRect();
+            baseW = fallback.width / Math.max(zoom, 1);
+            baseH = fallback.height / Math.max(zoom, 1);
+        }
+        var maxX = Math.max(0, (baseW * zoom - viewport.clientWidth) / 2);
+        var maxY = Math.max(0, (baseH * zoom - viewport.clientHeight) / 2);
+        panX = Math.max(-maxX, Math.min(maxX, panX));
+        panY = Math.max(-maxY, Math.min(maxY, panY));
+    }
+
+    function applyZoom() {
+        var lb = element.querySelector('.lb');
+        if (!lb) return;
+        clampPan();
+        var viewport = lb.querySelector('.mv');
+        var panWrap = lb.querySelector('.mp');
+        var wrap = lb.querySelector('.mw');
+        if (!panWrap || !wrap) return;
+        panWrap.style.transform = 'translate(' + panX.toFixed(1) + 'px, ' + panY.toFixed(1) + 'px)';
+        wrap.style.transform = 'scale(' + zoom.toFixed(2) + ')';
+        if (viewport) {
+            viewport.classList.toggle('pn', zoom > 1);
+            viewport.classList.toggle('dg', !!drag);
+        }
+        element.dataset.snapZoom = zoom.toFixed(2);
+        element.dataset.snapPan = panX.toFixed(1) + ',' + panY.toFixed(1);
+        var readout = lb.querySelector('.zr');
+        if (readout) readout.textContent = Math.round(zoom * 100) + '%';
+    }
+
+    function setZoom(nextZoom) {
+        zoom = Math.max(1, Math.min(4, nextZoom));
+        if (zoom === 1) {
+            panX = 0;
+            panY = 0;
+        }
+        applyZoom();
+    }
+
+    function bindPan(lb) {
+        var viewport = lb.querySelector('.mv');
+        if (!viewport || viewport.dataset.snapPanBound === '1') return;
+        viewport.dataset.snapPanBound = '1';
+
+        viewport.addEventListener('pointerdown', function(event) {
+            if (zoom <= 1) return;
+            if (event.target && event.target.closest && event.target.closest('[data-a]')) return;
+            drag = {
+                id: event.pointerId,
+                x: event.clientX,
+                y: event.clientY,
+                startPanX: panX,
+                startPanY: panY,
+            };
+            viewport.setPointerCapture(event.pointerId);
+            applyZoom();
+            event.preventDefault();
+        });
+
+        viewport.addEventListener('pointermove', function(event) {
+            if (!drag || drag.id !== event.pointerId) return;
+            panX = drag.startPanX + (event.clientX - drag.x);
+            panY = drag.startPanY + (event.clientY - drag.y);
+            applyZoom();
+            event.preventDefault();
+        });
+
+        function stopDrag(event) {
+            if (!drag) return;
+            if (event.pointerId !== undefined && drag.id !== event.pointerId) return;
+            drag = null;
+            applyZoom();
+        }
+
+        viewport.addEventListener('pointerup', stopDrag);
+        viewport.addEventListener('pointercancel', stopDrag);
+        viewport.addEventListener('pointerleave', function(event) {
+            if (drag && event.buttons === 0) stopDrag(event);
+        });
+
+        viewport.addEventListener('wheel', function(event) {
+            var delta = event.deltaY < 0 ? 0.25 : -0.25;
+            setZoom(zoom + delta);
+            event.preventDefault();
+        }, { passive: false });
+    }
+
+    function fitMedia(lb) {
+        var viewport = lb.querySelector('.mv');
+        var wrap = lb.querySelector('.mw');
+        var mediaEl = lb.querySelector('.mw img, .mw video');
+        if (!viewport || !wrap || !mediaEl) return;
+
+        function rememberBaseSize() {
+            var vw = viewport.clientWidth;
+            var vh = viewport.clientHeight;
+            if (!vw || !vh) return;
+            var naturalW = mediaEl.naturalWidth || mediaEl.videoWidth || 0;
+            var naturalH = mediaEl.naturalHeight || mediaEl.videoHeight || 0;
+            if (!naturalW || !naturalH) return;
+            var scale = Math.min(vw / naturalW, vh / naturalH, 1);
+            var fittedW = naturalW * scale;
+            var fittedH = naturalH * scale;
+            wrap.dataset.baseWidth = fittedW.toFixed(1);
+            wrap.dataset.baseHeight = fittedH.toFixed(1);
+            mediaEl.style.width = fittedW.toFixed(1) + 'px';
+            mediaEl.style.height = fittedH.toFixed(1) + 'px';
+            applyZoom();
+        }
+
+        if (mediaEl.tagName === 'IMG') {
+            if (mediaEl.complete) rememberBaseSize();
+            else mediaEl.addEventListener('load', rememberBaseSize, { once: true });
+        } else {
+            if (mediaEl.readyState >= 1) rememberBaseSize();
+            else mediaEl.addEventListener('loadedmetadata', rememberBaseSize, { once: true });
+        }
+        window.requestAnimationFrame(rememberBaseSize);
     }
 
     function wireGridCards() {
@@ -395,7 +539,13 @@ GRID_JS = """\
             lb.remove();
         }
         idx = -1;
+        zoom = 1;
+        panX = 0;
+        panY = 0;
+        drag = null;
         element.dataset.snapLbOpen = '0';
+        element.dataset.snapZoom = '1.00';
+        element.dataset.snapPan = '0.0,0.0';
     }
 
     function openLB() {
@@ -412,6 +562,9 @@ GRID_JS = """\
         var navN = hasNav ? '<div class="nv n" data-a="n">&#8250;</div>' : '';
         lb.innerHTML =
             '<div class="tp"><div class="ti">' + esc(m.n) + '</div>' +
+            '<div class="b" data-a="zo">&#8722;</div>' +
+            '<div class="b zr" data-a="zr">100%</div>' +
+            '<div class="b" data-a="zi">&#43;</div>' +
             '<div class="b" data-a="p">&#9664;</div>' +
             '<div class="b" data-a="n">&#9654;</div>' +
             '<div class="b" data-a="del">&#128465;</div>' +
@@ -426,12 +579,14 @@ GRID_JS = """\
         element.dataset.snapLbOpen = '1';
         loadBlob(m.u).then(function(src) {
             if (m.t === 'i') {
-                bd.innerHTML = navP + '<img src="' + src + '">' + navN;
+                bd.innerHTML = navP + '<div class="mv"><div class="mp"><div class="mw"><img src="' + src + '"></div></div></div>' + navN;
             } else {
                 bd.innerHTML = navP +
-                    '<video src="' + src + '" controls autoplay playsinline></video>' + navN;
+                    '<div class="mv"><div class="mp"><div class="mw"><video src="' + src + '" controls autoplay playsinline></video></div></div></div>' + navN;
             }
             wireLightboxControls(lb);
+            bindPan(lb);
+            fitMedia(lb);
         });
     }
 
