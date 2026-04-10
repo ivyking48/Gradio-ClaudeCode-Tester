@@ -15,9 +15,16 @@ import os, sys, time, subprocess, hashlib, base64, io, json, html as html_mod
 # --- Colab drive mount (guarded for local dev) ---
 try:
     from google.colab import drive
-    drive.mount("/content/drive", force_remount=False)
     MEDIA_ROOT = "/content/drive/MyDrive/SnapInsta_Downloads"
     THUMB_DIR = "/content/_snap_thumbs"
+    if os.environ.get("SNAP_SKIP_COLAB_MOUNT", "0").lower() not in {"1", "true", "yes"}:
+        try:
+            drive.mount("/content/drive", force_remount=False)
+        except Exception as exc:
+            # Notebook subprocesses do not have the live Colab kernel needed for drive.mount().
+            if not os.path.isdir("/content/drive/MyDrive"):
+                raise
+            print(f"[DEBUG] Skipping drive.mount(): {exc}")
 except ImportError:
     MEDIA_ROOT = os.path.expanduser("~/SnapInsta_Downloads")
     THUMB_DIR = os.path.join("/tmp", "_snap_thumbs")
