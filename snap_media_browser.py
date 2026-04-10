@@ -39,15 +39,21 @@ os.makedirs(MEDIA_ROOT, exist_ok=True)
 os.makedirs(THUMB_DIR, exist_ok=True)
 print(f"[DEBUG] MEDIA_ROOT={MEDIA_ROOT}  items={len(os.listdir(MEDIA_ROOT))}")
 
-# On Colab, ensure latest packages; skip locally if already installed
 try:
-    import google.colab  # noqa: F401
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "--upgrade", "--force-reinstall", "gradio>=6.0", "Pillow>=11.0,<12"])
-except ImportError:
-    pass  # local dev — assume gradio & Pillow already installed
-import gradio as gr
+    import gradio as gr
+except ImportError as exc:
+    raise RuntimeError(
+        "Gradio is not installed. Install it in the environment before running "
+        "snap_media_browser.py."
+    ) from exc
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont
+try:
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError as exc:
+    raise RuntimeError(
+        "Pillow is not installed. Install Pillow>=11 before running "
+        "snap_media_browser.py."
+    ) from exc
 
 # ============================================================
 # HELPERS
