@@ -8,3 +8,5 @@ build/
 *.png
 screenshot*.png
 .claude/
+.DS_Store
+.gradio/

@@ -21,7 +21,7 @@ conda activate gradio-tester
 pip install -e ".[dev,screenshot]"
 playwright install chromium
 
-# Run all tests (101 tests, requires ffmpeg)
+# Run all tests (112 tests, requires ffmpeg)
 pytest tests/ -v
 
 # Run a single test file
@@ -30,7 +30,7 @@ pytest tests/test_health.py -v
 # Run a single test
 pytest tests/test_health.py::test_health_reachable_success -v
 
-# Run the demo Gradio app (serves RGB test video on localhost:7860)
+# Run the demo Gradio app (video trim & zoom on localhost:7860)
 python app.py
 
 # CLI usage
@@ -48,7 +48,7 @@ gradio-tester https://abc123.gradio.live --json
 - `health.py` and `introspect.py` are **stdlib-only** (`urllib.request` + `json`) — no external HTTP libs allowed.
 - `client.py` lazy-imports `gradio_client` — returns descriptive error `TestResult` if missing. Includes `check_output_variance()` for detecting endpoints that ignore input.
 - `screenshot.py` lazy-imports `playwright` — captures screenshots and checks DOM for error elements.
-- `interact.py` lazy-imports `playwright` — drives Gradio UIs: fill inputs, click buttons, seek videos, verify outputs.
+- `interact.py` lazy-imports `playwright` — drives Gradio UIs: fill inputs, click buttons, seek videos, verify outputs, evaluate arbitrary JS (`eval_js`).
 - `video.py` shells out to `ffmpeg` via subprocess for frame extraction and raw pixel color analysis.
 
 **CLI** (`cli.py`): Entry point registered as `gradio-tester` in pyproject.toml. Exit code 0 = all passed, 1 = any failed. `--json` flag for machine-parseable output.
@@ -67,7 +67,8 @@ The agent should use a layered testing strategy:
 - **Layer 3 — Output variance**: `--check-variance /endpoint '[[input1], [input2], ...]'` to verify the endpoint doesn't always return the same value
 - **Layer 4 — UI interaction**: `--interact '<json>'` to drive the UI as a real user would (fill inputs, click buttons, verify outputs)
 - **Layer 5 — Video/visual**: `seek_video` + `read_input` + `verify` to test that video playback state flows through to the UI correctly
-- **Layer 6 — Cross-validation**: Compare API results against actual video frame analysis using `verify_color_sequence()`
+- **Layer 6 — DOM/canvas inspection**: `eval_js` to check arbitrary DOM state that labeled components can't reach (canvas pixels, video readyState, CSS properties)
+- **Layer 7 — Cross-validation**: Compare API results against actual video frame analysis using `verify_color_sequence()`
 
 Each layer catches different failure modes. An app can pass API checks but fail UI checks (e.g., input not wired to video position). Always test multiple layers.
 
@@ -81,7 +82,9 @@ gradio-tester <url> --interact '[
   {"action": "seek_video", "timestamp": 5.0, "label": "Video Label", "sync_input": "Input Label"},
   {"action": "read_input", "label": "Input Name"},
   {"action": "wait", "ms": 1000},
-  {"action": "screenshot", "path": "debug.png"}
+  {"action": "screenshot", "path": "debug.png"},
+  {"action": "eval_js", "expression": "document.querySelector('#canvas').width"},
+  {"action": "eval_js", "expression": "document.querySelector('#canvas').width", "expected": 640}
 ]'
 ```
 

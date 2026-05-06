@@ -347,6 +347,61 @@ async def _do_screenshot(page: Any, action: dict, timeout_ms: int) -> TestResult
         )
 
 
+async def _do_eval_js(page: Any, action: dict, timeout_ms: int) -> TestResult:
+    """Evaluate arbitrary JavaScript and optionally assert on the result.
+
+    Without ``expected``: diagnostic mode — evaluate once, always passes.
+    With ``expected``: assertion mode — polls until result matches or timeout.
+    """
+    start = time.monotonic()
+    expression = action["expression"]
+    expected = action.get("expected")  # None means diagnostic mode
+    eval_timeout = action.get("timeout_ms", timeout_ms)
+    try:
+        if expected is not None:
+            # Assertion mode: poll until match or timeout
+            deadline = time.monotonic() + eval_timeout / 1000
+            result = None
+            while time.monotonic() < deadline:
+                result = await page.evaluate(expression)
+                if result == expected:
+                    elapsed = (time.monotonic() - start) * 1000
+                    return TestResult(
+                        name="interact_eval_js",
+                        passed=True,
+                        duration_ms=elapsed,
+                        details={"expression": expression, "expected": expected, "result": result},
+                    )
+                await asyncio.sleep(0.2)
+            elapsed = (time.monotonic() - start) * 1000
+            return TestResult(
+                name="interact_eval_js",
+                passed=False,
+                duration_ms=elapsed,
+                details={"expression": expression, "expected": expected, "result": result},
+                error=f"Expected {expected!r}, got {result!r}",
+            )
+        else:
+            # Diagnostic mode: evaluate once, always passes
+            result = await page.evaluate(expression)
+            elapsed = (time.monotonic() - start) * 1000
+            return TestResult(
+                name="interact_eval_js",
+                passed=True,
+                duration_ms=elapsed,
+                details={"expression": expression, "result": result},
+            )
+    except Exception as e:
+        elapsed = (time.monotonic() - start) * 1000
+        return TestResult(
+            name="interact_eval_js",
+            passed=False,
+            duration_ms=elapsed,
+            details={"expression": expression},
+            error=str(e),
+        )
+
+
 _ACTION_HANDLERS = {
     "fill": _do_fill,
     "click": _do_click,
@@ -357,6 +412,7 @@ _ACTION_HANDLERS = {
     "download_file": _do_download_file,
     "wait": _do_wait,
     "screenshot": _do_screenshot,
+    "eval_js": _do_eval_js,
 }
 
 

@@ -2,6 +2,46 @@
 
 Patterns, workarounds, and things that do and don't work when building and testing Gradio apps. Built from real debugging sessions with Gradio 6.x.
 
+## Injecting Page-Level JavaScript in Gradio 6.9.0
+
+### What Doesn't Work
+
+**`demo.load(js=...)`**: The JS callback never fires in Gradio 6.9.0.
+
+**`<script>` inside `gr.HTML()`**: Gradio renders `gr.HTML` content via `innerHTML`, and per the HTML spec, `<script>` tags inserted via innerHTML do **not** execute. The `<script>` tag will appear in the DOM but its code never runs. Controls rendered in the HTML will look interactive (buttons click, range inputs slide) but won't be wired to any logic.
+
+### What Works
+
+**`gr.Blocks(head="<script>...</script>")`**: The `head=` parameter injects content into the real `<head>` of the document, where `<script>` tags execute normally.
+
+```python
+_PLAYER_JS = """
+<script>
+(function() {
+    // Wait for DOM since this runs from <head>
+    function init() {
+        const el = document.getElementById('my-element');
+        if (!el) { setTimeout(init, 300); return; }
+        // ... setup code ...
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => setTimeout(init, 500));
+    } else {
+        setTimeout(init, 500);
+    }
+})();
+</script>
+"""
+
+with gr.Blocks(head=_PLAYER_JS) as demo:
+    gr.HTML('<div id="my-element">...</div>')
+```
+
+Key points:
+- Since `head=` scripts run before the body, use `setTimeout` or `DOMContentLoaded` to wait for elements
+- Re-query elements by ID in loops/handlers (don't cache references) — Gradio may re-render `gr.HTML`, replacing DOM nodes
+- Inline `js=` on component events (`slider.change(js=...)`, `button.click(js=...)`) still works fine
+
 ## API Path Changes in Gradio 6.x
 
 **What changed**: Gradio 6.x moved API endpoints under `/gradio_api/`:
@@ -38,29 +78,75 @@ Gradio 6.x uses Svelte-based internal state management. Setting a DOM element's 
 
 ### What Works
 
-**Use `gr.HTML` for the video + the `js` parameter on button click**:
-```python
-video_html = gr.HTML('<video id="test-video" controls><source src="..." type="video/mp4"></video>')
+**Use `gr.HTML` for the video markup + `head=` for the player JS + `js=` on button click to bridge browser state into Python**:
 
-check_btn.click(
-    fn=my_function,
-    inputs=timestamp_input,
-    outputs=[output, timestamp_input],
-    js="""(timestamp) => {
+```python
+# Player JS in head= (see "Injecting Page-Level JavaScript" section above)
+_PLAYER_JS = """<script>
+(function() {
+    function init() {
         const v = document.getElementById('test-video');
-        if (v && v.currentTime > 0) return v.currentTime;
-        return timestamp;
-    }""",
-)
+        if (!v) { setTimeout(init, 300); return; }
+        v.load();  // required — innerHTML-inserted <video> won't auto-load
+        // ... render loop, controls, etc.
+    }
+    document.addEventListener('DOMContentLoaded', () => setTimeout(init, 500));
+})();
+</script>"""
+
+with gr.Blocks(head=_PLAYER_JS) as demo:
+    # Video markup only — no <script> (it won't execute in gr.HTML)
+    gr.HTML('<div><video id="test-video"><source src="/gradio_api/file=video.mp4"></video></div>')
+
+    check_btn.click(
+        fn=my_function,
+        inputs=timestamp_input,
+        outputs=[output, timestamp_input],
+        js="""(timestamp) => {
+            const v = document.getElementById('test-video');
+            if (v && v.currentTime > 0) return v.currentTime;
+            return timestamp;
+        }""",
+    )
 ```
 
 The `js` parameter on an event handler runs JavaScript **before** the Python function. Its return value replaces the input. This is the correct way to inject browser-side state (like `video.currentTime`) into Gradio's reactive system, because Gradio itself manages the value flow.
 
 Key points:
-- Use `gr.HTML` instead of `gr.Video` to get a standard HTML5 `<video>` element with a known `id`
-- The `js` function receives the current input values as arguments and returns the modified values
-- Return both the output and the updated timestamp to keep the Number input in sync
+- Use `gr.HTML` for video markup, but put all JavaScript in `gr.Blocks(head=...)` — see "Injecting Page-Level JavaScript" section
+- Call `video.load()` explicitly — `<video>` sources injected via innerHTML don't auto-load
+- Re-query elements by ID in render loops — Gradio may re-render `gr.HTML`, replacing DOM nodes with new ones
+- The `js=` function on events receives current input values as arguments and returns modified values
 - Use `allowed_paths=["test_assets"]` in `demo.launch()` so Gradio serves the video file
+
+## Event Delegation for gr.HTML Components
+
+Gradio may re-render `gr.HTML` content at any time, replacing DOM elements. Event listeners attached to specific elements (e.g., a wrapper div) become stale after re-render.
+
+**What doesn't work**: Binding events to elements found by ID, then caching the reference:
+```javascript
+const wrapper = document.getElementById('player-wrapper');
+wrapper.addEventListener('click', handler);  // dies after Gradio re-renders
+```
+
+**What works**: Delegate all events from `document`, matching by target ID:
+```javascript
+document.addEventListener('click', (e) => {
+    if (e.target.id !== 'play-pause-btn') return;
+    // ... handle click
+});
+```
+This survives any number of re-renders since `document` is never replaced. Use the same pattern for `mousedown`, `touchstart`, `wheel`, etc.
+
+## Custom Timeline with Trim Handles
+
+Instead of using `gr.Number` inputs for trim start/end, the demo app uses draggable handles on a custom HTML timeline. The handles update hidden `gr.Number` components via the native setter pattern (see "Canvas-Based Zoom/Pan Preview").
+
+**Race condition when dragging trim-out handle then pressing play**: Dragging the out handle seeks the video to `trimEnd`. The trim enforcement poll sees `currentTime >= trimEnd` and immediately pauses. Fix:
+1. Add a `_playGuard = Date.now()` timestamp when play is pressed
+2. Skip trim enforcement for 300ms after play (`Date.now() - _playGuard > 300`)
+3. Skip trim enforcement while a handle is being dragged (`!_draggingHandle`)
+4. After trim range ends, reset `currentTime` to `trimStart` so next play works
 
 ## Testing Video Apps with Playwright
 
@@ -144,33 +230,33 @@ You can also clear Gradio's temp file cache:
 rm -rf /private/var/folders/*/T/gradio/   # macOS
 ```
 
-## CSS Transform Preview for Zoom/Pan
+## Canvas-Based Zoom/Pan Preview
 
 ### The Pattern
 
-Use CSS `transform: scale() translate()` on the `<video>` element for instant visual zoom/pan preview, without re-encoding. The actual export uses ffmpeg `crop` + `scale` filters.
+Use a `<canvas>` element with `drawImage()` crop parameters for instant zoom/pan preview, without re-encoding. The render loop reads `data-*` attributes from the canvas element. The actual export uses ffmpeg `crop` + `scale` filters.
 
-```python
-# Wrap video in an overflow:hidden container
-gr.HTML('<div id="preview-container" style="overflow:hidden"><video id="test-video" ...></div>')
+**Mouse/touch interactions** (all handled in `head=` JS, no Gradio sliders needed):
+- **Scroll wheel on canvas** → zoom in/out (updates `canvas.dataset.zoom`)
+- **Click-drag on canvas** (when zoomed) → pan (updates `canvas.dataset.panX/panY`)
+- Hidden `gr.Slider` components stay in the DOM for export, synced from JS via the native value setter pattern
 
-# Wire slider changes to CSS transforms via js=
-_preview_js = """(zoom, px, py) => {
-    const v = document.getElementById('test-video');
-    if (v) v.style.transform = `scale(${zoom}) translate(${-px * 30}%, ${-py * 30}%)`;
-    return [zoom, px, py];
-}"""
-for slider in [zoom_slider, pan_x_slider, pan_y_slider]:
-    slider.change(fn=lambda z, px, py: (z, px, py),
-                  inputs=[zoom_slider, pan_x_slider, pan_y_slider],
-                  outputs=[zoom_slider, pan_x_slider, pan_y_slider], js=_preview_js)
+**Syncing JS state to hidden Gradio inputs**:
+```javascript
+function setGradioInput(elemId, value) {
+    const input = document.querySelector('#' + elemId + ' input');
+    if (!input) return;
+    const nativeSet = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    nativeSet.call(input, value.toFixed(1));
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+}
 ```
-
-**Key**: The container needs `overflow: hidden` so the zoomed video doesn't bleed outside its bounds. Set `transform-origin: center center` on the video.
+The native setter bypasses Gradio's Svelte state management, and the dispatched `input`/`change` events trigger Gradio's internal handlers to update its state.
 
 ### Pitfall: Preview vs Export Mismatch
 
-The CSS preview and ffmpeg export use different math. CSS `translate()` uses percentages of the element's own dimensions, while ffmpeg `crop` uses absolute pixel offsets. A common bug is getting the preview to look right but the export to crop differently. Always cross-validate by extracting frames from the exported video.
+The canvas `drawImage` preview and ffmpeg export use different coordinate systems. `drawImage(video, sx, sy, sw, sh, 0, 0, cw, ch)` uses source pixel coordinates, while ffmpeg `crop` uses absolute pixel offsets with `scale` to resize. Always cross-validate by extracting frames from the exported video.
 
 ## ffmpeg Crop-from-Zoom Math
 
@@ -226,6 +312,91 @@ gradio-tester <url> --interact '[
 
 **What doesn't work**: Using `input_value()` on sliders — they use `<input type="range">` which may not respond to standard value reads in the same way as text inputs.
 
+## Using `eval_js` for Canvas/DOM Verification
+
+The `verify` action can only check labeled Gradio components. For anything else — canvas dimensions, CSS properties, video `readyState`, arbitrary DOM state — use the `eval_js` interact action.
+
+**Diagnostic mode** (no `expected`) — evaluate once, always passes, result in details:
+```bash
+gradio-tester <url> --interact '[
+  {"action": "eval_js", "expression": "document.getElementById(\"preview-canvas\").width"}
+]'
+```
+
+**Assertion mode** (with `expected`) — polls until match or timeout:
+```bash
+gradio-tester <url> --interact '[
+  {"action": "eval_js", "expression": "document.getElementById(\"test-video\").readyState", "expected": 4}
+]'
+```
+
+Use `timeout_ms` per-action to override the default poll duration.
+
+**Use cases**:
+- Check if a canvas has non-zero dimensions after rendering
+- Verify a video element's `readyState` is `4` (HAVE_ENOUGH_DATA) before seeking
+- Read computed CSS properties (`getComputedStyle(el).transform`)
+- Count child elements, check visibility, read `data-*` attributes
+- Any DOM state that isn't exposed through Gradio's labeled component system
+
+## Custom HTML Components (gr.HTML with html_template/css_template/js_on_load)
+
+Gradio now supports custom HTML components that eliminate the need for iframe srcdoc workarounds or `head=` script injection for many use cases.
+
+### The API
+
+```python
+grid = gr.HTML(
+    value={"html": "<div>...</div>", "media": [...]},
+    html_template="""${value && value.html ? value.html : '<div>Empty</div>'}""",
+    css_template=".card { border-radius: 8px; }",
+    js_on_load="""
+        // Runs ONCE on first render
+        let data = props.value.media;
+
+        // Watch for value changes from Python event handlers
+        watch('value', () => {
+            data = props.value.media;
+        });
+
+        // Event delegation survives template re-renders
+        element.addEventListener('click', (e) => {
+            const card = e.target.closest('.card');
+            if (card) { /* handle click */ }
+        });
+    """,
+    apply_default_css=False,
+)
+```
+
+### Key Lifecycle Details
+
+- **`html_template`**: Supports `${expr}` (JS expressions) and `{{var}}` (Handlebars). Default is `${value}`. Re-evaluates on every value change.
+- **`css_template`**: Scoped to the component. Styles apply to all elements inside `element`, including dynamically appended ones.
+- **`js_on_load`**: Runs **only once** on first render. Has access to `element`, `props`, `trigger()`, `watch()`, `upload()`, and `server`.
+- **`watch('value', callback)`**: Fires when the value changes (from Python returning a new value). Use this instead of re-running `js_on_load`.
+- **`props.value`**: Read/write the component's current value. Setting it triggers template re-render.
+- **`trigger('event_name')`**: Fire custom events that Python listeners can handle.
+- **`server.fn_name(args)`**: Call Python functions passed via `server_functions=[]` parameter.
+
+### What This Replaces
+
+| Old pattern | New pattern |
+|---|---|
+| `gr.Blocks(head="<script>...")` + `setTimeout(init)` polling | `js_on_load` with `element` reference |
+| iframe srcdoc (for arbitrary JS) | `js_on_load` (runs unrestricted JS) |
+| `document.addEventListener` with ID matching | Event delegation on `element` |
+| Re-query elements after re-render | `watch('value', ...)` for reactive updates |
+| `gr.HTML("<script>...")` (doesn't execute) | `js_on_load` (always executes) |
+
+### Gotchas
+
+- **`js_on_load` runs once**: Don't put re-render logic in it. Use `watch()`.
+- **Template re-renders replace innerHTML**: Dynamically appended children (e.g., a lightbox overlay) get removed on value change. Use `watch` to clean up state.
+- **`position: fixed` inside component**: Works for fullscreen overlays (lightbox). The scoped CSS still applies as long as the element is a child of `element`.
+- **Structured values**: Python dicts serialize as JS objects via JSON. Access with `props.value.key`. HTML strings work with the default `${value}` template.
+- **Custom props**: Pass arbitrary kwargs to `gr.HTML(size=40, max_stars=10)` — accessible in templates and `js_on_load` via `props.size`, `props.max_stars`.
+
 ## Component Behavior Notes
 
 **`gr.Number` defaults**:
@@ -234,7 +405,7 @@ gradio-tester <url> --interact '[
 
 **`gr.Video` vs `gr.HTML` for video**:
 - `gr.Video`: Provides upload, webcam, and playback UI. Does NOT expose `currentTime` to Python. Good for simple video display where you don't need to read playback state.
-- `gr.HTML` with `<video>`: Full control via JavaScript. Use when you need to read/set `currentTime`. Requires `allowed_paths` in `demo.launch()` to serve the file.
+- `gr.HTML` with `<video>`: Full control via JavaScript. Use when you need to read/set `currentTime`. Requires `allowed_paths` in `demo.launch()` to serve the file. **Important**: `<script>` tags inside `gr.HTML` do not execute (innerHTML limitation) — put all JS in `gr.Blocks(head=...)` instead. Also call `video.load()` from the head script since innerHTML-inserted `<video>` sources don't auto-load.
 
 **`gr.Button.click(js=...)` parameter**:
 - The `js` function runs in the browser BEFORE the Python `fn`

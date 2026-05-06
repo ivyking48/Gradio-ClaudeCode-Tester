@@ -499,3 +499,99 @@ def test_download_file_action(mock_async_pw):
     assert len(results) == 1
     assert results[0].passed is True
     assert "file" in results[0].details.get("url", "")
+
+
+# ---------------------------------------------------------------------------
+# eval_js action — diagnostic mode (no expected)
+# ---------------------------------------------------------------------------
+
+@patch("gradio_tester.interact._PLAYWRIGHT_AVAILABLE", True)
+@patch("gradio_tester.interact.async_playwright", create=True)
+def test_eval_js_diagnostic(mock_async_pw):
+    page, _ = _make_mock_page()
+    page.evaluate = AsyncMock(return_value=640)
+    browser = _make_mock_browser(page)
+    mock_async_pw.return_value = _make_mock_playwright(browser)
+
+    from gradio_tester.interact import execute_actions
+
+    results = execute_actions("https://test.gradio.live", [
+        {"action": "eval_js", "expression": "document.querySelector('#canvas').width"},
+    ])
+
+    assert len(results) == 1
+    assert results[0].passed is True
+    assert results[0].details["result"] == 640
+    page.evaluate.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# eval_js action — expected match
+# ---------------------------------------------------------------------------
+
+@patch("gradio_tester.interact._PLAYWRIGHT_AVAILABLE", True)
+@patch("gradio_tester.interact.async_playwright", create=True)
+def test_eval_js_expected_match(mock_async_pw):
+    page, _ = _make_mock_page()
+    page.evaluate = AsyncMock(return_value=4)
+    browser = _make_mock_browser(page)
+    mock_async_pw.return_value = _make_mock_playwright(browser)
+
+    from gradio_tester.interact import execute_actions
+
+    results = execute_actions("https://test.gradio.live", [
+        {"action": "eval_js", "expression": "document.getElementById('video').readyState", "expected": 4},
+    ])
+
+    assert len(results) == 1
+    assert results[0].passed is True
+    assert results[0].details["result"] == 4
+    assert results[0].details["expected"] == 4
+
+
+# ---------------------------------------------------------------------------
+# eval_js action — expected mismatch
+# ---------------------------------------------------------------------------
+
+@patch("gradio_tester.interact._PLAYWRIGHT_AVAILABLE", True)
+@patch("gradio_tester.interact.async_playwright", create=True)
+def test_eval_js_expected_mismatch(mock_async_pw):
+    page, _ = _make_mock_page()
+    page.evaluate = AsyncMock(return_value=0)
+    browser = _make_mock_browser(page)
+    mock_async_pw.return_value = _make_mock_playwright(browser)
+
+    from gradio_tester.interact import execute_actions
+
+    results = execute_actions("https://test.gradio.live", [
+        {"action": "eval_js", "expression": "document.getElementById('video').readyState",
+         "expected": 4, "timeout_ms": 100},
+    ])
+
+    assert len(results) == 1
+    assert results[0].passed is False
+    assert "Expected 4" in results[0].error
+    assert "got 0" in results[0].error
+
+
+# ---------------------------------------------------------------------------
+# eval_js action — JS error
+# ---------------------------------------------------------------------------
+
+@patch("gradio_tester.interact._PLAYWRIGHT_AVAILABLE", True)
+@patch("gradio_tester.interact.async_playwright", create=True)
+def test_eval_js_error(mock_async_pw):
+    page, _ = _make_mock_page()
+    page.evaluate = AsyncMock(side_effect=Exception("Evaluation failed: ReferenceError"))
+    browser = _make_mock_browser(page)
+    mock_async_pw.return_value = _make_mock_playwright(browser)
+
+    from gradio_tester.interact import execute_actions
+
+    results = execute_actions("https://test.gradio.live", [
+        {"action": "eval_js", "expression": "nonExistentVar.foo"},
+    ])
+
+    assert len(results) == 1
+    assert results[0].passed is False
+    assert "ReferenceError" in results[0].error
